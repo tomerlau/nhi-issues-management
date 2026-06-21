@@ -23,6 +23,8 @@ describe('migration runner', () => {
 
     expect(names).toContain('tenants');
     expect(names).toContain('users');
+    expect(names).toContain('user_credentials');
+    expect(names).toContain('sessions');
     expect(names).toContain('schema_migrations');
     db.close();
   });
@@ -31,7 +33,7 @@ describe('migration runner', () => {
     const db = openDatabase(':memory:');
     runMigrations(db);
 
-    for (const table of ['tenants', 'users']) {
+    for (const table of ['tenants', 'users', 'user_credentials', 'sessions']) {
       const row = db
         .prepare('SELECT name, strict FROM pragma_table_list WHERE name = ?')
         .get(table) as TableListRow | undefined;
@@ -43,7 +45,7 @@ describe('migration runner', () => {
   it('records applied migrations and is idempotent on re-run', () => {
     const db = openDatabase(':memory:');
     const firstRun = runMigrations(db);
-    expect(firstRun).toEqual(['001_initial_schema.sql']);
+    expect(firstRun).toEqual(['001_initial_schema.sql', '002_authentication.sql']);
 
     const secondRun = runMigrations(db);
     expect(secondRun).toEqual([]);
@@ -51,7 +53,7 @@ describe('migration runner', () => {
     const recorded = (
       db.prepare('SELECT id FROM schema_migrations ORDER BY id').all() as { id: string }[]
     ).map((row) => row.id);
-    expect(recorded).toEqual(['001_initial_schema.sql']);
+    expect(recorded).toEqual(['001_initial_schema.sql', '002_authentication.sql']);
     db.close();
   });
 });

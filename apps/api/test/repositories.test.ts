@@ -38,14 +38,18 @@ describe('tenant-scoped repositories', () => {
     ).toThrow();
   });
 
-  it('allows the same email in two different tenants', () => {
+  it('rejects the same email across two different tenants (global uniqueness)', () => {
     users.create('tenant-a', { id: 'ua', email: 'shared@example.com', displayName: 'A' });
     expect(() =>
       users.create('tenant-b', { id: 'ub', email: 'shared@example.com', displayName: 'B' }),
-    ).not.toThrow();
+    ).toThrow();
+  });
 
-    expect(users.findByEmail('tenant-a', 'shared@example.com')?.id).toBe('ua');
-    expect(users.findByEmail('tenant-b', 'shared@example.com')?.id).toBe('ub');
+  it('finds a user globally by email and derives its tenant (authentication lookup)', () => {
+    users.create('tenant-b', { id: 'ub', email: 'global@example.com', displayName: 'B' });
+    const found = users.findByEmailForAuthentication('global@example.com');
+    expect(found).toMatchObject({ id: 'ub', tenantId: 'tenant-b', email: 'global@example.com' });
+    expect(users.findByEmailForAuthentication('absent@example.com')).toBeNull();
   });
 
   it('retrieves a user with the correct tenant and user ids', () => {

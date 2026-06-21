@@ -1,6 +1,8 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { TenantRepository } from '../repositories/tenant-repository.js';
 import { UserRepository } from '../repositories/user-repository.js';
+import { UserCredentialRepository } from '../repositories/user-credential-repository.js';
+import { hashPassword } from '../auth/password.js';
 
 /**
  * Fixed timestamp for seeded records so repeated seeding is byte-for-byte
@@ -14,9 +16,9 @@ export const DEMO_TENANTS = [
 ] as const;
 
 /**
- * `alice@example.com` deliberately appears in both tenants to demonstrate that
- * email uniqueness is scoped per tenant, not global. These demo records carry
- * no credentials; authentication arrives in Milestone 3.
+ * Every demo email is globally unique. Each user has a documented demo password;
+ * only the scrypt hash is ever stored, never the plaintext. The passwords here
+ * are intentionally public test credentials for the local POC.
  */
 export const DEMO_USERS = [
   {
@@ -24,34 +26,40 @@ export const DEMO_USERS = [
     id: 'user-acme-alice',
     email: 'alice@example.com',
     displayName: 'Alice Anderson',
+    password: 'acme-alice-demo',
   },
   {
     tenantId: 'tenant-acme',
     id: 'user-acme-bob',
     email: 'bob@example.com',
     displayName: 'Bob Brown',
+    password: 'acme-bob-demo',
   },
   {
     tenantId: 'tenant-globex',
     id: 'user-globex-alice',
-    email: 'alice@example.com',
+    email: 'alice@globex.example.com',
     displayName: 'Alice Globex',
+    password: 'globex-alice-demo',
   },
 ] as const;
 
 export interface SeedResult {
   tenantsCreated: number;
   usersCreated: number;
+  credentialsCreated: number;
 }
 
 /**
- * Insert the demo tenants and users. Idempotent: existing records (matched by
- * tenant id, and by tenant-scoped email for users) are left untouched, so
- * running the seed repeatedly never duplicates or overwrites data.
+ * Insert the demo tenants, users, and password credentials. Idempotent:
+ * existing records (tenants by id, users by tenant-scoped email, credentials by
+ * tenant-scoped user id) are left untouched, so running the seed repeatedly
+ * never duplicates, overwrites, or re-hashes data.
  */
 export function seedDemoData(db: DatabaseSync): SeedResult {
   const tenants = new TenantRepository(db);
   const users = new UserRepository(db);
+  const credentials = new UserCredentialRepository(db);
 
   let tenantsCreated = 0;
   for (const tenant of DEMO_TENANTS) {
@@ -62,6 +70,7 @@ export function seedDemoData(db: DatabaseSync): SeedResult {
   }
 
   let usersCreated = 0;
+  let credentialsCreated = 0;
   for (const user of DEMO_USERS) {
     if (!users.findByEmail(user.tenantId, user.email)) {
       users.create(user.tenantId, {
@@ -72,7 +81,17 @@ export function seedDemoData(db: DatabaseSync): SeedResult {
       });
       usersCreated += 1;
     }
+
+    if (!credentials.findByUserId(user.tenantId, user.id)) {
+      credentials.create({
+        tenantId: user.tenantId,
+        userId: user.id,
+        passwordHash: hashPassword(user.password),
+        createdAt: SEED_TIMESTAMP,
+      });
+      credentialsCreated += 1;
+    }
   }
 
-  return { tenantsCreated, usersCreated };
+  return { tenantsCreated, usersCreated, credentialsCreated };
 }

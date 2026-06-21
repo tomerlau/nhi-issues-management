@@ -1,7 +1,7 @@
 # Project Assumptions
 
 This document records the assumptions and tradeoffs relevant to the
-functionality implemented through the current milestone (Milestone 2). It grows
+functionality implemented through the current milestone (Milestone 3). It grows
 cumulatively as later milestones add functionality.
 
 ## Scope
@@ -10,6 +10,7 @@ cumulatively as later milestones add functionality.
 - Mandatory functionality has priority over optional functionality.
 - Milestone 1 established the project foundation.
 - Milestone 2 adds persistence, the tenant/user data model, and tenant isolation.
+- Milestone 3 adds backend-only application authentication.
 - The optional blog digest is not part of the current implementation.
 
 ## Frontend
@@ -90,11 +91,37 @@ cumulatively as later milestones add functionality.
 ## Data model and isolation
 
 - Users belong to exactly one tenant.
-- Emails are unique per tenant rather than globally; the same email may exist in
-  more than one tenant.
+- Emails are globally unique; the same email cannot exist in more than one tenant.
 - Repository methods that read or write tenant-owned data require an explicit
-  tenant scope; a user ID alone is never sufficient authorization scope.
+  tenant scope; a user ID alone is never sufficient authorization scope. The one
+  exception is a global find-by-email lookup used only at login, from which the
+  tenant is then derived.
 - Foreign keys provide referential integrity but do not replace tenant-scoped
   repository queries, which provide authorization isolation.
-- Authentication fields (passwords, sessions, API keys, roles) are intentionally
-  deferred to Milestone 3.
+
+## Authentication
+
+- **Users are predefined and seeded.** There is no registration; the demo users
+  and their credentials are created by the idempotent seed.
+- **Login accepts email and password only.** The backend derives the user and
+  tenant from the stored user record; clients never provide or override `userId`
+  or `tenantId` after login.
+- **Passwords are hashed locally with scrypt.**
+  - **Production alternative:** a managed identity provider, or a vetted password
+    hashing service with tuned parameters and a rotation policy.
+  - **Tradeoff:** Node's built-in `crypto.scrypt` keeps the POC dependency-free
+    and is a sound choice for local hashing, but credential lifecycle management
+    is out of scope.
+- **Sessions are SQLite-backed and single-instance.**
+  - **Production alternative:** a shared session store (e.g. Redis) or signed,
+    revocable tokens behind a load balancer.
+  - **Tradeoff:** SQLite sessions are simple and survive an API restart on the
+    same database file, but do not support horizontal scaling.
+- **Raw session tokens are stored only in HttpOnly cookies.** The database stores
+  only each token's SHA-256 hash, so a leaked database row cannot be replayed as a
+  session. Tokens carry 256 bits of entropy.
+- **Secure cookies depend on the environment.** The `Secure` cookie attribute is
+  enabled when `NODE_ENV=production` and disabled for local HTTP development.
+- **Deferred:** registration, password reset or change, SSO and social login,
+  roles and permissions, API keys, tenant administration, rate limiting, account
+  lockout, and production/distributed session infrastructure.

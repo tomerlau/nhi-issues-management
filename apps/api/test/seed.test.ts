@@ -18,7 +18,7 @@ describe('demo seed data', () => {
 
   it('creates exactly two tenants and the expected demo users', () => {
     const result = seedDemoData(db);
-    expect(result).toEqual({ tenantsCreated: 2, usersCreated: 3 });
+    expect(result).toEqual({ tenantsCreated: 2, usersCreated: 3, credentialsCreated: 3 });
 
     const tenants = new TenantRepository(db).list();
     expect(tenants.map((t) => t.id)).toEqual(['tenant-acme', 'tenant-globex']);
@@ -28,19 +28,29 @@ describe('demo seed data', () => {
       'alice@example.com',
       'bob@example.com',
     ]);
-    expect(users.list('tenant-globex').map((u) => u.email)).toEqual(['alice@example.com']);
+    expect(users.list('tenant-globex').map((u) => u.email)).toEqual(['alice@globex.example.com']);
+  });
+
+  it('seeds globally unique emails across tenants', () => {
+    seedDemoData(db);
+    const emails = DEMO_USERS.map((u) => u.email);
+    expect(new Set(emails).size).toBe(emails.length);
   });
 
   it('is idempotent: running twice creates no duplicates', () => {
     seedDemoData(db);
     const second = seedDemoData(db);
-    expect(second).toEqual({ tenantsCreated: 0, usersCreated: 0 });
+    expect(second).toEqual({ tenantsCreated: 0, usersCreated: 0, credentialsCreated: 0 });
 
     const tenantCount = (
       db.prepare('SELECT COUNT(*) AS n FROM tenants').get() as { n: number }
     ).n;
     const userCount = (db.prepare('SELECT COUNT(*) AS n FROM users').get() as { n: number }).n;
+    const credentialCount = (
+      db.prepare('SELECT COUNT(*) AS n FROM user_credentials').get() as { n: number }
+    ).n;
     expect(tenantCount).toBe(DEMO_TENANTS.length);
     expect(userCount).toBe(DEMO_USERS.length);
+    expect(credentialCount).toBe(DEMO_USERS.length);
   });
 });

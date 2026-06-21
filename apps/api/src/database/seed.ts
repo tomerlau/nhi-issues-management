@@ -7,8 +7,9 @@ const db = initializeDatabase(databasePath);
 try {
   const result = seedDemoData(db);
   console.log(
-    `[seed] ${databasePath}: created ${result.tenantsCreated} tenant(s) and ` +
-      `${result.usersCreated} user(s); existing records left unchanged`,
+    `[seed] ${databasePath}: created ${result.tenantsCreated} tenant(s), ` +
+      `${result.usersCreated} user(s), and ${result.credentialsCreated} credential(s); ` +
+      'existing records left unchanged',
   );
 } finally {
   db.close();
