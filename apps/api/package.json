@@ -9,7 +9,9 @@
     "start": "node dist/server.js",
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "migrate": "tsx src/database/migrate.ts",
+    "seed": "tsx src/database/seed.ts"
   },
   "dependencies": {
     "express": "^4.21.2"

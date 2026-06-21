@@ -1,6 +1,12 @@
 import { createApp } from './app.js';
+import { resolveDatabasePath } from './config/database.js';
+import { initializeDatabase } from './database/lifecycle.js';
 
 const port = 3001;
+
+const databasePath = resolveDatabasePath();
+const db = initializeDatabase(databasePath);
+console.log(`[api] database ready at ${databasePath}`);
 
 const app = createApp();
 
@@ -10,7 +16,10 @@ const server = app.listen(port, () => {
 
 const shutdown = (signal: NodeJS.Signals): void => {
   console.log(`[api] received ${signal}, shutting down`);
-  server.close(() => process.exit(0));
+  server.close(() => {
+    db.close();
+    process.exit(0);
+  });
 };
 
 process.on('SIGINT', () => shutdown('SIGINT'));
