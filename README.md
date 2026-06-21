@@ -2,39 +2,58 @@
 
 A focused proof of concept for integrating Oasis Security IdentityHub with Jira.
 
-This repository is built in milestones. The current milestone adds the first
-persistence and domain model: a local SQLite database with versioned
-migrations, a tenant and user schema, tenant-scoped repositories, and
-deterministic demo seed data for two isolated tenants.
+This repository is built in milestones. The current milestone adds backend-only
+application authentication: globally unique user emails, Argon2id-hashed
+passwords, persistent server-side sessions, secure session cookies, and reusable
+authentication middleware.
 
-## Current milestone scope (Milestone 2: Data Model and Tenant Isolation)
+## Current milestone scope (Milestone 3: Application Authentication)
 
 Implemented:
 
-- SQLite persistence using the built-in Node.js 24 `node:sqlite` module (no ORM, no external SQLite library).
-- Versioned, transactional, idempotent SQL migrations run by a minimal in-repo migration runner.
-- `tenants` and `users` tables as SQLite `STRICT` tables, with `users` scoped to a tenant.
-- Per-connection foreign-key enforcement (`PRAGMA foreign_keys = ON`), verified by the database factory.
-- Tenant-scoped repositories: every user read/write requires the owning `tenantId`.
-- Deterministic, idempotent demo seed of exactly two tenants and their demo users.
-- Backend startup that opens the database, verifies foreign keys, and runs pending migrations before listening.
-- Focused tests proving schema integrity, migration behavior, and cross-tenant isolation.
+- Global email uniqueness for users, replacing the Milestone 2 per-tenant
+  uniqueness, via a new migration that rebuilds the `users` table and adds a
+  composite `(tenant_id, id)` key for tenant-aware authentication foreign keys.
+- Password credentials stored separately from the user record in
+  `user_credentials`, hashed with Argon2id via the maintained `argon2` package.
+  The library generates a random salt and returns the standard self-describing
+  PHC hash string, which is stored verbatim. Plaintext passwords are never
+  stored, and hashes are never returned by the user repository or any API
+  response.
+- Persistent server-side sessions in a `sessions` table that stores only the
+  SHA-256 hash of an opaque 256-bit token, the owning tenant and user, and
+  creation/expiration times. Sessions have an absolute eight-hour lifetime.
+- Cookie-based authentication: the raw token is sent only in an `HttpOnly`,
+  `SameSite=Lax`, `Path=/` cookie (`Secure` in production), never in JSON or
+  client-side storage.
+- Authentication endpoints `POST /api/auth/login`, `GET /api/auth/session`, and
+  `POST /api/auth/logout`, all returning `Cache-Control: no-store`.
+- Reusable authentication middleware that resolves the session from the cookie,
+  loads the session and user within their tenant scope, and attaches a typed
+  authenticated context — userId and tenantId always come from the session,
+  never from request input.
+- Idempotent demo seeding extended with deterministic password credentials.
 
-Carried over from Milestone 1:
+Carried over from earlier milestones:
 
 - npm-workspaces monorepo with separate `apps/api` (backend) and `apps/web` (frontend).
-- Express backend exposing `GET /api/health` (unchanged; it does not touch the database).
+- SQLite persistence using the built-in Node.js 24 `node:sqlite` module (no ORM, no external SQLite library).
+- Versioned, transactional, idempotent SQL migrations run by a minimal in-repo migration runner.
+- Per-connection foreign-key enforcement (`PRAGMA foreign_keys = ON`), verified by the database factory.
+- Tenant-scoped repositories: every tenant-owned user read/write requires the owning `tenantId`.
+- Express backend exposing `GET /api/health` (unchanged; unauthenticated and not touching the database).
 - React + Vite frontend showing backend availability with a retry action.
 - Quality gates (ESLint, strict typecheck, Vitest, build) and GitHub Actions CI.
 
-Explicitly **not** implemented in Milestone 2 (deferred to later work):
+Explicitly **not** implemented in Milestone 3 (deferred to later work):
 
-- Login, logout, sessions, cookies, registration, or tenant administration.
-- Passwords, password hashes, API keys, roles, or any authentication fields (Milestone 3).
+- Authentication UI; the frontend is unchanged.
+- User registration, password reset or change, SSO, or social login.
+- Roles, permissions, API keys, or tenant administration.
+- Rate limiting, account lockout, or other abuse protections.
+- Redis or distributed session storage; sessions are single-instance SQLite.
+- A general-purpose authentication framework.
 - Jira OAuth, Jira credentials/token encryption, Jira API access, or ticket creation.
-- Tenant slugs or tenant codes; cascading tenant deletion.
-- Frontend tenant or user screens, or any debug HTTP endpoint exposing tenants/users.
-- Docker, PostgreSQL, an ORM, or a generic repository/migration framework.
 
 ## Prerequisites
 
@@ -102,27 +121,156 @@ npm run seed       # run migrations, then insert demo data (idempotent)
 
 - `tenants(id, name, created_at)` — a tenant is an isolation boundary.
 - `users(id, tenant_id, email, display_name, created_at)` — each user belongs to
-  exactly one tenant. `tenant_id` references `tenants(id)`, and `(tenant_id,
-  email)` is unique, so email uniqueness is **per tenant**, not global. Both
-  tables are SQLite `STRICT` tables.
+  exactly one tenant. `tenant_id` references `tenants(id)`, `email` is **globally
+  unique**, and `(tenant_id, id)` is unique so authentication tables can
+  reference a user by tenant and id together.
+- `user_credentials(user_id, tenant_id, password_hash, created_at)` — password
+  hashes, stored apart from the user record and referenced by a composite
+  `(tenant_id, user_id)` foreign key.
+- `sessions(token_hash, tenant_id, user_id, created_at, expires_at)` — server-side
+  sessions storing only the SHA-256 hash of the session token.
 
-Repositories enforce tenant scope: every user query requires the owning
-`tenantId`, so a user can never be read through another tenant's context. A user
-ID alone is never sufficient to retrieve a user.
+All tables are SQLite `STRICT` tables. Repositories enforce tenant scope: every
+normal user query requires the owning `tenantId`, so a user can never be read
+through another tenant's context. The single deliberate exception is a global
+find-by-email lookup used only at login, where the tenant is derived from the
+matched user.
 
 ### Demo data
 
 `npm run seed` creates exactly two tenants and their demo users with fixed,
-readable IDs:
+readable IDs and deterministic, documented demo passwords (idempotent — safe to
+run repeatedly):
 
-| Tenant          | Name         | User IDs / emails                                                   |
-| --------------- | ------------ | ------------------------------------------------------------------- |
-| `tenant-acme`   | Acme Corp    | `user-acme-alice` (`alice@example.com`), `user-acme-bob` (`bob@example.com`) |
-| `tenant-globex` | Globex Corp  | `user-globex-alice` (`alice@example.com`)                           |
+| Tenant          | Name        | User ID             | Email                      | Demo password       |
+| --------------- | ----------- | ------------------- | -------------------------- | ------------------- |
+| `tenant-acme`   | Acme Corp   | `user-acme-alice`   | `alice@example.com`        | `acme-alice-demo`   |
+| `tenant-acme`   | Acme Corp   | `user-acme-bob`     | `bob@example.com`          | `acme-bob-demo`     |
+| `tenant-globex` | Globex Corp | `user-globex-alice` | `alice@globex.example.com` | `globex-alice-demo` |
 
-`alice@example.com` exists in both tenants on purpose, demonstrating that email
-uniqueness is tenant-scoped. The demo records carry no passwords or credentials;
-authentication is Milestone 3.
+These are public test credentials for the local POC only. The database stores
+just the Argon2id hash of each password, never the plaintext.
+
+## Authentication
+
+Authentication is backend-only and cookie-based. Login accepts only an email and
+password; the backend derives the user and tenant from the stored user record,
+and clients never provide or override `userId` or `tenantId` after login.
+
+| Method & path           | Auth required | Purpose                                            |
+| ----------------------- | ------------- | -------------------------------------------------- |
+| `POST /api/auth/login`  | no            | Verify credentials, create a session, set cookie.  |
+| `GET /api/auth/session` | yes (cookie)  | Return the authenticated user.                     |
+| `POST /api/auth/logout` | no            | Revoke the current session and clear the cookie.   |
+
+All three responses include `Cache-Control: no-store`.
+
+**Login** — request body:
+
+```json
+{ "email": "alice@example.com", "password": "acme-alice-demo" }
+```
+
+Success (HTTP 200) returns only safe user fields and sets the session cookie:
+
+```json
+{ "user": { "id": "user-acme-alice", "tenantId": "tenant-acme", "email": "alice@example.com", "displayName": "Alice Anderson" } }
+```
+
+Invalid credentials (unknown email, wrong password, or a user without a
+credential record) all return the same generic HTTP 401, so a client cannot tell
+whether an email exists:
+
+```json
+{ "error": { "code": "invalid_credentials", "message": "Invalid email or password." } }
+```
+
+Missing or malformed input (non-string fields, empty values, or values over the
+length limits) returns a structured HTTP 400 with code `invalid_request`.
+
+**Session** — `GET /api/auth/session` returns the same safe user shape on success
+and an HTTP 401 with code `unauthenticated` when the cookie is missing, invalid,
+expired, or revoked.
+
+**Logout** — `POST /api/auth/logout` deletes the current session (if any), clears
+the cookie, and is idempotent. It never affects other concurrent sessions.
+
+### Cookie-based local workflow
+
+The session cookie is `nhi_session`, set with `HttpOnly`, `SameSite=Lax`,
+`Path=/`, and a `Max-Age` matching the eight-hour session lifetime. `Secure` is
+enabled when `NODE_ENV=production` and disabled for local HTTP development. The
+raw token lives only in the cookie; only its SHA-256 hash is stored server-side.
+Because sessions are persisted in SQLite, a session survives an API restart as
+long as the same database file is used. See
+[Manual validation](#manual-validation) for end-to-end `curl` examples.
+
+## Manual validation
+
+These commands exercise the full authentication flow locally. They assume the
+API is reachable at `http://localhost:3001` (the default `npm run dev` port).
+
+Reset to a clean local database, then migrate and seed:
+
+```bash
+# Remove any existing development database (the data/ directory is git-ignored).
+rm -f apps/api/data/app.db apps/api/data/app.db-wal apps/api/data/app.db-shm
+npm run migrate      # apply migrations to the resolved database
+npm run seed         # insert demo tenants, users, and credentials (idempotent)
+```
+
+Start the API (in a separate terminal):
+
+```bash
+npm run dev --workspace apps/api
+```
+
+Log in and save the cookie to a jar, then read the session and log out:
+
+```bash
+# Log in (stores the nhi_session cookie in alice.cookies).
+curl -i -c alice.cookies -X POST http://localhost:3001/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"alice@example.com","password":"acme-alice-demo"}'
+
+# Read the authenticated session using the saved cookie.
+curl -i -b alice.cookies http://localhost:3001/api/auth/session
+
+# Log out (revokes only this session and clears the cookie).
+curl -i -b alice.cookies -c alice.cookies -X POST http://localhost:3001/api/auth/logout
+
+# The session is rejected afterwards (HTTP 401).
+curl -i -b alice.cookies http://localhost:3001/api/auth/session
+```
+
+Two users with separate cookie jars remain authenticated independently:
+
+```bash
+curl -s -c bob.cookies -X POST http://localhost:3001/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"bob@example.com","password":"acme-bob-demo"}' > /dev/null
+curl -s -c globex.cookies -X POST http://localhost:3001/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"alice@globex.example.com","password":"globex-alice-demo"}' > /dev/null
+
+curl -s -b bob.cookies http://localhost:3001/api/auth/session       # Acme / Bob
+curl -s -b globex.cookies http://localhost:3001/api/auth/session    # Globex / Alice
+```
+
+Inspect the database to confirm passwords are hashed and raw tokens are absent
+(requires the `sqlite3` CLI; the application itself does not depend on it):
+
+```bash
+# Password hashes only — every value starts with the Argon2id PHC prefix ($argon2id$).
+sqlite3 apps/api/data/app.db 'SELECT user_id, password_hash FROM user_credentials;'
+
+# Sessions store only token hashes (64-char SHA-256 hex), never raw tokens.
+sqlite3 apps/api/data/app.db 'SELECT token_hash, tenant_id, user_id, expires_at FROM sessions;'
+```
+
+The raw token printed in the login `Set-Cookie` header will not appear in the
+`sessions` table. Neither the API logs nor any API response print password
+hashes, session hashes, raw tokens, or the cookie value.
 
 ## Quality gate commands
 

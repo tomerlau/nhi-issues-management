@@ -8,7 +8,7 @@ const databasePath = resolveDatabasePath();
 const db = initializeDatabase(databasePath);
 console.log(`[api] database ready at ${databasePath}`);
 
-const app = createApp();
+const app = createApp(db, { cookieSecure: process.env.NODE_ENV === 'production' });
 
 const server = app.listen(port, () => {
   console.log(`[api] listening on http://localhost:${port}`);

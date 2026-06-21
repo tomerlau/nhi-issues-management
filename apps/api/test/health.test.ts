@@ -1,9 +1,15 @@
 import request from 'supertest';
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import { createApp } from '../src/app.js';
+import { createMigratedMemoryDb } from './helpers.js';
 
 describe('GET /api/health', () => {
-  const app = createApp();
+  const db = createMigratedMemoryDb();
+  const app = createApp(db);
+
+  afterAll(() => {
+    db.close();
+  });
 
   it('returns HTTP 200', async () => {
     const res = await request(app).get('/api/health');

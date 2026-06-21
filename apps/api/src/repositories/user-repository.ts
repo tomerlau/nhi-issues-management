@@ -79,6 +79,22 @@ export class UserRepository {
     return row ? toUser(row) : null;
   }
 
+  /**
+   * Global, tenant-unaware lookup by email. This is the single deliberate
+   * exception to tenant scoping: at login the caller has no tenant yet, so the
+   * tenant is derived from the matched user. Email is globally unique, so this
+   * returns at most one user. Do not use it for normal tenant-owned reads.
+   */
+  findByEmailForAuthentication(email: string): User | null {
+    const row = this.db
+      .prepare(
+        `SELECT id, tenant_id, email, display_name, created_at
+         FROM users WHERE email = ?`,
+      )
+      .get(email) as UserRow | undefined;
+    return row ? toUser(row) : null;
+  }
+
   list(tenantId: string): User[] {
     const rows = this.db
       .prepare(
