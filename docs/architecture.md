@@ -130,14 +130,15 @@ deletion remains out of scope.
 Password credentials live in their own `user_credentials` table rather than on
 the user row, so a hash is never read or returned as part of a normal user
 query. Only the authentication path reads them, through a dedicated
-`UserCredentialRepository`. Passwords are hashed with Node's built-in
-`crypto.scrypt`: each hash uses a fresh 16-byte random salt and is stored in a
-versioned, self-describing string —
-`scrypt$1$n=<N>,r=<r>,p=<p>$<saltBase64>$<keyBase64>` — so the parameters needed
-to verify it always travel with the hash. Verification recomputes the derived key
-with the stored parameters and compares it in constant time
-(`crypto.timingSafeEqual`); a malformed stored hash fails closed. The database
-contains only hashes; plaintext passwords are never stored.
+`UserCredentialRepository`. Passwords are hashed with Argon2id through the
+maintained `argon2` package, wrapped by a small application-owned module
+(`src/auth/password.ts`) exposing only async `hashPassword` and `verifyPassword`.
+The library generates a fresh random salt per hash and returns the standard
+self-describing PHC string (`$argon2id$v=19$m=...,t=...,p=...$salt$hash`), which
+is stored verbatim — the application does not parse hashes, manage salts, or
+handle crypto parameters itself. Verification delegates to the library and
+returns `false` (rather than throwing) for a malformed or unsupported stored
+hash. The database contains only hashes; plaintext passwords are never stored.
 
 ### Authentication: login and session resolution
 

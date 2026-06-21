@@ -20,9 +20,9 @@ describe('file-backed database persistence', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it('retains migrated and seeded data after close and reopen', () => {
+  it('retains migrated and seeded data after close and reopen', async () => {
     const first = initializeDatabase(dbPath);
-    seedDemoData(first);
+    await seedDemoData(first);
     first.close();
 
     const second = initializeDatabase(dbPath);

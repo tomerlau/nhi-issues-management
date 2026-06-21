@@ -50,7 +50,7 @@ export class AuthService {
    * null for every invalid-credential case (unknown email, missing credential
    * record, wrong password) so callers cannot distinguish them.
    */
-  login(email: string, password: string): LoginSuccess | null {
+  async login(email: string, password: string): Promise<LoginSuccess | null> {
     const user = this.users.findByEmailForAuthentication(normalizeEmail(email));
     if (!user) {
       return null;
@@ -61,7 +61,7 @@ export class AuthService {
       return null;
     }
 
-    if (!verifyPassword(password, credential.passwordHash)) {
+    if (!(await verifyPassword(password, credential.passwordHash))) {
       return null;
     }
 

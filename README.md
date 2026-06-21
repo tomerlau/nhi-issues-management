@@ -3,7 +3,7 @@
 A focused proof of concept for integrating Oasis Security IdentityHub with Jira.
 
 This repository is built in milestones. The current milestone adds backend-only
-application authentication: globally unique user emails, scrypt-hashed
+application authentication: globally unique user emails, Argon2id-hashed
 passwords, persistent server-side sessions, secure session cookies, and reusable
 authentication middleware.
 
@@ -15,10 +15,11 @@ Implemented:
   uniqueness, via a new migration that rebuilds the `users` table and adds a
   composite `(tenant_id, id)` key for tenant-aware authentication foreign keys.
 - Password credentials stored separately from the user record in
-  `user_credentials`, hashed with Node's built-in `crypto.scrypt` using a random
-  salt and a versioned, self-describing hash format with constant-time
-  verification. Plaintext passwords are never stored, and hashes are never
-  returned by the user repository or any API response.
+  `user_credentials`, hashed with Argon2id via the maintained `argon2` package.
+  The library generates a random salt and returns the standard self-describing
+  PHC hash string, which is stored verbatim. Plaintext passwords are never
+  stored, and hashes are never returned by the user repository or any API
+  response.
 - Persistent server-side sessions in a `sessions` table that stores only the
   SHA-256 hash of an opaque 256-bit token, the owning tenant and user, and
   creation/expiration times. Sessions have an absolute eight-hour lifetime.
@@ -148,7 +149,7 @@ run repeatedly):
 | `tenant-globex` | Globex Corp | `user-globex-alice` | `alice@globex.example.com` | `globex-alice-demo` |
 
 These are public test credentials for the local POC only. The database stores
-just the scrypt hash of each password, never the plaintext.
+just the Argon2id hash of each password, never the plaintext.
 
 ## Authentication
 
@@ -260,7 +261,7 @@ Inspect the database to confirm passwords are hashed and raw tokens are absent
 (requires the `sqlite3` CLI; the application itself does not depend on it):
 
 ```bash
-# Password hashes only — every value starts with the scrypt format prefix.
+# Password hashes only — every value starts with the Argon2id PHC prefix ($argon2id$).
 sqlite3 apps/api/data/app.db 'SELECT user_id, password_hash FROM user_credentials;'
 
 # Sessions store only token hashes (64-char SHA-256 hex), never raw tokens.

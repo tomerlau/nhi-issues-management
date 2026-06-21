@@ -51,21 +51,24 @@ export function createAuthRouter(
     next();
   });
 
-  router.post('/login', (request, response) => {
+  router.post('/login', (request, response, next) => {
     const validated = validateLoginBody(request.body);
     if (!validated.ok) {
       response.status(400).json(invalidRequestError(validated.message));
       return;
     }
 
-    const result = authService.login(validated.value.email, validated.value.password);
-    if (!result) {
-      response.status(401).json(invalidCredentialsError());
-      return;
-    }
-
-    setSessionCookie(response, result.token, options.cookieSecure);
-    response.status(200).json({ user: result.user });
+    authService
+      .login(validated.value.email, validated.value.password)
+      .then((result) => {
+        if (!result) {
+          response.status(401).json(invalidCredentialsError());
+          return;
+        }
+        setSessionCookie(response, result.token, options.cookieSecure);
+        response.status(200).json({ user: result.user });
+      })
+      .catch(next);
   });
 
   router.get('/session', requireAuth, (request, response) => {

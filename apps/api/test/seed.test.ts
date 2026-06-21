@@ -16,8 +16,8 @@ describe('demo seed data', () => {
     db.close();
   });
 
-  it('creates exactly two tenants and the expected demo users', () => {
-    const result = seedDemoData(db);
+  it('creates exactly two tenants and the expected demo users', async () => {
+    const result = await seedDemoData(db);
     expect(result).toEqual({ tenantsCreated: 2, usersCreated: 3, credentialsCreated: 3 });
 
     const tenants = new TenantRepository(db).list();
@@ -31,15 +31,15 @@ describe('demo seed data', () => {
     expect(users.list('tenant-globex').map((u) => u.email)).toEqual(['alice@globex.example.com']);
   });
 
-  it('seeds globally unique emails across tenants', () => {
-    seedDemoData(db);
+  it('seeds globally unique emails across tenants', async () => {
+    await seedDemoData(db);
     const emails = DEMO_USERS.map((u) => u.email);
     expect(new Set(emails).size).toBe(emails.length);
   });
 
-  it('is idempotent: running twice creates no duplicates', () => {
-    seedDemoData(db);
-    const second = seedDemoData(db);
+  it('is idempotent: running twice creates no duplicates', async () => {
+    await seedDemoData(db);
+    const second = await seedDemoData(db);
     expect(second).toEqual({ tenantsCreated: 0, usersCreated: 0, credentialsCreated: 0 });
 
     const tenantCount = (

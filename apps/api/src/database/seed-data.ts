@@ -17,7 +17,7 @@ export const DEMO_TENANTS = [
 
 /**
  * Every demo email is globally unique. Each user has a documented demo password;
- * only the scrypt hash is ever stored, never the plaintext. The passwords here
+ * only the Argon2id hash is ever stored, never the plaintext. The passwords here
  * are intentionally public test credentials for the local POC.
  */
 export const DEMO_USERS = [
@@ -56,7 +56,7 @@ export interface SeedResult {
  * tenant-scoped user id) are left untouched, so running the seed repeatedly
  * never duplicates, overwrites, or re-hashes data.
  */
-export function seedDemoData(db: DatabaseSync): SeedResult {
+export async function seedDemoData(db: DatabaseSync): Promise<SeedResult> {
   const tenants = new TenantRepository(db);
   const users = new UserRepository(db);
   const credentials = new UserCredentialRepository(db);
@@ -86,7 +86,7 @@ export function seedDemoData(db: DatabaseSync): SeedResult {
       credentials.create({
         tenantId: user.tenantId,
         userId: user.id,
-        passwordHash: hashPassword(user.password),
+        passwordHash: await hashPassword(user.password),
         createdAt: SEED_TIMESTAMP,
       });
       credentialsCreated += 1;

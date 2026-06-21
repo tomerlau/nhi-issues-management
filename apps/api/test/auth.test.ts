@@ -35,8 +35,8 @@ function sessionSetCookie(res: request.Response): string | undefined {
 describe('authentication', () => {
   let db: DatabaseSync;
 
-  beforeEach(() => {
-    db = createSeededMemoryDb();
+  beforeEach(async () => {
+    db = await createSeededMemoryDb();
   });
 
   afterEach(() => {

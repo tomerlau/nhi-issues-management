@@ -106,12 +106,14 @@ cumulatively as later milestones add functionality.
 - **Login accepts email and password only.** The backend derives the user and
   tenant from the stored user record; clients never provide or override `userId`
   or `tenantId` after login.
-- **Passwords are hashed locally with scrypt.**
-  - **Production alternative:** a managed identity provider, or a vetted password
-    hashing service with tuned parameters and a rotation policy.
-  - **Tradeoff:** Node's built-in `crypto.scrypt` keeps the POC dependency-free
-    and is a sound choice for local hashing, but credential lifecycle management
-    is out of scope.
+- **Passwords are hashed locally with Argon2id via the maintained `argon2`
+  package.** The library manages random salts and the standard PHC storage
+  format; the application keeps only a thin wrapper and does no custom crypto
+  formatting or parameter handling.
+  - **Production alternative:** a managed identity provider or centralized
+    authentication service may own password credentials entirely.
+  - **Tradeoff:** this adds a binary runtime dependency, but avoids maintaining
+    custom cryptographic formatting, parsing, and parameter-handling code.
 - **Sessions are SQLite-backed and single-instance.**
   - **Production alternative:** a shared session store (e.g. Redis) or signed,
     revocable tokens behind a load balancer.

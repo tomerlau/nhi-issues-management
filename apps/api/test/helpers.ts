@@ -11,9 +11,9 @@ export function createMigratedMemoryDb(): DatabaseSync {
 }
 
 /** Open an isolated in-memory database with the schema applied and demo data seeded. */
-export function createSeededMemoryDb(): DatabaseSync {
+export async function createSeededMemoryDb(): Promise<DatabaseSync> {
   const db = createMigratedMemoryDb();
-  seedDemoData(db);
+  await seedDemoData(db);
   return db;
 }
 
