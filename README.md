@@ -68,7 +68,36 @@ npm run lint        # ESLint across both apps
 npm run typecheck   # TypeScript strict typecheck for both apps
 npm test            # Vitest unit tests for both apps
 npm run build       # Build backend (tsc) and frontend (vite build)
+npm run check       # All of the above (fail-fast) plus the workflow hook tests
 ```
+
+## Claude Code workflow
+
+This repository is built with Claude Code under a fixed, committed workflow.
+
+- Start each milestone with the **start-milestone** skill. It updates `main`
+  (fast-forward only) and creates one `milestone/<n>-<slug>` branch before any
+  files are edited.
+- One branch per milestone. Fix iterations stay on the existing milestone branch
+  rather than opening a new one.
+- Claude does not stage, commit, push, or manage pull requests. The developer
+  reviews the changes and owns all commits, pushes, and PRs.
+- Finish every implementation iteration with the **finish-work** skill, which
+  inspects the diff and runs the full quality gate.
+- `npm run check` is the canonical local quality gate (lint, typecheck, all
+  tests including the workflow hook tests, then build).
+
+What is committed vs. local:
+
+- The project-level `.claude/settings.json`, `.claude/hooks/`, and
+  `.claude/skills/` are intentionally committed — they define the shared
+  workflow and its guardrails.
+- Local-only Claude settings stay in `.claude/settings.local.json`, which is
+  git-ignored and must not be committed.
+
+A `PreToolUse` hook blocks file edits on `main`, `master`, or a detached HEAD,
+and a `Stop` hook runs `npm run check` when there are local changes. Both are
+enforced by Claude Code, not by this README.
 
 ## How the Vite proxy works
 
