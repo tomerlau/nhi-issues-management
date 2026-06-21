@@ -13,6 +13,8 @@
   ],
   "scripts": {
     "dev": "concurrently --names \"api,web\" --prefix-colors \"blue,magenta\" \"npm run dev --workspace apps/api\" \"npm run dev --workspace apps/web\"",
+    "migrate": "npm run migrate --workspace apps/api",
+    "seed": "npm run seed --workspace apps/api",
     "build": "npm run build --workspace apps/api && npm run build --workspace apps/web",
     "lint": "eslint .",
     "typecheck": "npm run typecheck --workspace apps/api && npm run typecheck --workspace apps/web",
