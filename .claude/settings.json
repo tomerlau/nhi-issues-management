@@ -1,0 +1,98 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(git add)",
+      "Bash(git add:*)",
+      "Bash(git commit)",
+      "Bash(git commit:*)",
+      "Bash(git push)",
+      "Bash(git push:*)",
+      "Bash(git merge)",
+      "Bash(git merge:*)",
+      "Bash(git rebase)",
+      "Bash(git rebase:*)",
+      "Bash(git cherry-pick)",
+      "Bash(git cherry-pick:*)",
+      "Bash(git revert)",
+      "Bash(git revert:*)",
+      "Bash(git tag)",
+      "Bash(git tag:*)",
+      "Bash(git reset --hard)",
+      "Bash(git reset --hard:*)",
+      "Bash(git reset --merge:*)",
+      "Bash(git reset --keep:*)",
+      "Bash(git clean)",
+      "Bash(git clean:*)",
+      "Bash(git restore)",
+      "Bash(git restore:*)",
+      "Bash(git checkout .)",
+      "Bash(git checkout --:*)",
+      "Bash(git stash)",
+      "Bash(git stash:*)",
+      "Bash(git branch -d:*)",
+      "Bash(git branch -D:*)",
+      "Bash(git branch --delete:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push --force-with-lease:*)",
+      "Bash(git push -f:*)",
+      "Bash(git update-ref:*)",
+      "Bash(gh pr create:*)",
+      "Bash(gh pr merge:*)",
+      "Bash(gh pr close:*)",
+      "Bash(gh pr edit:*)",
+      "Bash(gh pr comment:*)",
+      "Bash(gh pr review:*)",
+      "Bash(gh pr ready:*)",
+      "Bash(gh release create:*)",
+      "Bash(gh release edit:*)",
+      "Bash(gh release delete:*)",
+      "Bash(gh release upload:*)"
+    ],
+    "allow": [
+      "Bash(git status)",
+      "Bash(git status:*)",
+      "Bash(git diff)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git branch --show-current)",
+      "Bash(git branch --list:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(git fetch:*)",
+      "Bash(git ls-remote:*)",
+      "Bash(git switch main)",
+      "Bash(git switch -c:*)",
+      "Bash(git checkout main)",
+      "Bash(git checkout -b:*)",
+      "Bash(git pull --ff-only origin main)",
+      "Bash(npm run:*)",
+      "Bash(npm test:*)",
+      "Bash(npm ci:*)",
+      "Bash(npm install:*)",
+      "Bash(node --test:*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|NotebookEdit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/guard-branch.mjs"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/run-quality-gates.mjs"
+          }
+        ]
+      }
+    ]
+  }
+}
