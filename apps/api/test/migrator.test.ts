@@ -95,3 +95,37 @@ describe('migration runner failure handling', () => {
     db.close();
   });
 });
+
+describe('migration runner ordering', () => {
+  let migrationsDir: string;
+
+  beforeEach(() => {
+    migrationsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nhi-migrations-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(migrationsDir, { recursive: true, force: true });
+  });
+
+  it('applies migrations by numeric identifier, not lexicographically', () => {
+    // Lexicographically '10_tenth.sql' sorts before '2_second.sql', so the old
+    // string sort would run the tenth migration first. It inserts into a table
+    // created by the second migration, so wrong ordering fails structurally.
+    fs.writeFileSync(
+      path.join(migrationsDir, '2_second.sql'),
+      'CREATE TABLE ordered_marker (id TEXT PRIMARY KEY) STRICT;',
+    );
+    fs.writeFileSync(
+      path.join(migrationsDir, '10_tenth.sql'),
+      "INSERT INTO ordered_marker (id) VALUES ('tenth');",
+    );
+
+    const db = openDatabase(':memory:');
+    const applied = runMigrations(db, migrationsDir);
+
+    expect(applied).toEqual(['2_second.sql', '10_tenth.sql']);
+    const row = db.prepare('SELECT id FROM ordered_marker').get() as { id: string };
+    expect(row.id).toBe('tenth');
+    db.close();
+  });
+});

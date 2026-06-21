@@ -8,13 +8,17 @@ import type { DatabaseSync } from 'node:sqlite';
  */
 export const MIGRATIONS_DIR = path.resolve(import.meta.dirname, '..', '..', 'migrations');
 
-const MIGRATION_FILE = /^\d+_.+\.sql$/;
+const MIGRATION_FILE = /^(\d+)_.+\.sql$/;
+
+function migrationNumber(file: string): number {
+  return Number.parseInt(MIGRATION_FILE.exec(file)![1], 10);
+}
 
 function loadMigrationFiles(dir: string): string[] {
   return fs
     .readdirSync(dir)
     .filter((file) => MIGRATION_FILE.test(file))
-    .sort((a, b) => a.localeCompare(b, 'en'));
+    .sort((a, b) => migrationNumber(a) - migrationNumber(b) || a.localeCompare(b, 'en'));
 }
 
 /**
