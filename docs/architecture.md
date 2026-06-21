@@ -204,9 +204,13 @@ required.
 
 ### Why no ORM or generic repository layer
 
-The schema is intentionally tiny and the queries are simple and explicit. A
-plain `node:sqlite` connection with hand-written SQL keeps the persistence layer
-easy to read and audit, avoids native build dependencies, and makes the tenant
-boundary visible in every query. An ORM or a generic base repository would add
-abstraction and indirection with no payoff at this scope, and a generic layer
-risks hiding the very tenant-scoping the design depends on.
+The schema is intentionally tiny and the queries are simple and explicit. Using
+the built-in `node:sqlite` API with hand-written SQL keeps the persistence layer
+easy to read and audit, avoids an additional SQLite-specific native database
+dependency, and makes the tenant boundary visible in every query. The project
+does still include one binary runtime dependency, `argon2`, for password
+hashing, so this is not a no-native-dependency design. The main reason for
+avoiding an ORM remains keeping SQL explicit, auditable, and visibly
+tenant-scoped: an ORM or a generic base repository would add abstraction and
+indirection with no payoff at this scope, and a generic layer risks hiding the
+very tenant-scoping the design depends on.

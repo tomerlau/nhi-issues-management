@@ -58,9 +58,10 @@ cumulatively as later milestones add functionality.
   Node.js 24 `node:sqlite` API.
 - **Production alternative:** an asynchronous production database client and
   connection pool.
-- **Tradeoff:** the built-in API avoids native dependencies and keeps the POC
-  small, but synchronous database work blocks the Node.js event loop and the API
-  is not treated as the production persistence choice.
+- **Tradeoff:** the built-in API avoids a SQLite-specific native database
+  dependency and keeps the POC small, but synchronous database work blocks the
+  Node.js event loop and the API is not treated as the production persistence
+  choice.
 
 ## Persistence: in-repo migration runner
 
@@ -72,8 +73,10 @@ cumulatively as later milestones add functionality.
 
 ## Tenants and users: seeded demo records
 
-- **POC assumption:** users and tenants are deterministic seeded demo records,
-  without registration or credentials.
+- **POC assumption:** tenants, users, and their credentials are deterministic
+  seeded demo records. Registration, password reset, password change, and
+  account-management flows are not supported. Credentials are stored as Argon2id
+  hashes; plaintext passwords are never stored.
 - **Production alternative:** a managed tenant and identity lifecycle with
   administrative provisioning, authentication, auditing, and account-management
   flows.
