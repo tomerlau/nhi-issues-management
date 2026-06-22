@@ -128,15 +128,21 @@ Implemented:
   `UNIQUE (tenant_id, jira_site_url, jira_issue_id)` constraint prevent duplicates.
 - **Sanitized HTTP outcome mapping**: 201 on creation; 400 invalid input; 401
   unauthenticated; 409 not connected; 422 project inaccessible or `Task`
-  unsupported; 502 credential rejection / invalid response / unavailable; 503 not
-  configured or credentials undecryptable; 504 timeout; 500 on a provenance
-  persistence failure. No raw Jira content, tokens, or internal detail ever leak.
+  unsupported; 502 `jira_credentials_rejected` when the stored credentials are
+  rejected, or 502 `jira_unreachable` for an invalid response / unavailable
+  upstream; 503 not configured or credentials undecryptable; 504 timeout; 500 on a
+  provenance persistence failure. No raw Jira content, tokens, or internal detail
+  ever leak.
 
 Approved POC behavior: Jira creation and SQLite provenance persistence are
-sequential and **not** a distributed transaction. If Jira creates the issue but
-provenance persistence fails, the result is `persistence_failed` (HTTP 500) and
-the already-created Jira issue may remain untracked locally; there is no
-compensation, retry, idempotency key, reconciliation, worker, or queue.
+sequential and **not** a distributed transaction, so not every issue Jira creates
+is guaranteed a local provenance row. If Jira confirms the creation but provenance
+persistence fails, the result is `persistence_failed` (HTTP 500); if Jira may have
+created the issue but the request times out before the response is read, the
+result is a timeout (HTTP 504). In both cases the issue may exist in Jira while
+remaining untracked locally. There is no idempotency key, durable operation
+tracking, safe retry, reconciliation, compensating deletion, or worker/queue, so
+an immediate retry after a timeout may create a duplicate issue.
 
 Explicitly **not** implemented in Milestone 8: any frontend or ticket-creation
 UI; a recent-tickets list or any read/query endpoint; editing, deleting, or
@@ -819,8 +825,9 @@ includes credentials or raw Jira content.
 | Missing application session                              | 401    | `unauthenticated`           |
 | Tenant has no Jira connection                            | 409    | `jira_not_connected`        |
 | Project inaccessible to the tenant connection            | 422    | `jira_project_inaccessible` |
-| Project does not support the fixed `Task` issue type     | 422    | `jira_task_unsupported`     |
-| Jira rejected credentials / invalid response / upstream  | 502    | `jira_unreachable`          |
+| Project does not support the fixed `Task` issue type     | 422    | `jira_task_unsupported`       |
+| Stored Jira credentials rejected                         | 502    | `jira_credentials_rejected` |
+| Jira unreachable / invalid response / upstream error     | 502    | `jira_unreachable`          |
 | Jira request timed out                                   | 504    | `jira_timeout`              |
 | Encryption key absent or stored credential undecryptable | 503    | `jira_not_configured`       |
 | Jira created the issue but local provenance failed       | 500    | `internal_error`            |
@@ -828,12 +835,25 @@ includes credentials or raw Jira content.
 Unlike the connect-time endpoint (where rejected credentials return 422), a
 credential rejection during ticket creation maps to 502: the connection was
 verified at connect time, so a later rejection is treated as an upstream failure.
+It returns its own `jira_credentials_rejected` ("The stored Jira credentials were
+rejected. Reconnect Jira and try again.") so the caller knows to reconnect,
+distinct from the generic `jira_unreachable` used for a network error, malformed or
+rate-limited response, or 5xx.
 
 The provenance row is written **only after** Jira confirms a successful creation.
-Jira creation and local persistence are sequential and not atomic: if Jira creates
-the issue but the provenance insert fails, the response is HTTP 500 and the
-already-created Jira issue may remain untracked locally. This is an approved POC
-tradeoff — see [docs/assumptions.md](docs/assumptions.md).
+Jira creation and local persistence are sequential and not atomic, so not every
+issue Jira creates is guaranteed a local provenance row:
+
+- If Jira confirms the creation but the provenance insert fails, the response is
+  HTTP 500 and the already-created Jira issue remains untracked locally.
+- If Jira may have created the issue but the application times out or loses the
+  response before reading it, the application never learns the issue id/key,
+  records no provenance, and returns HTTP 504 even though the issue may exist.
+
+There is no idempotency key, durable operation tracking, safe retry,
+reconciliation, compensating deletion, or worker/queue; Jira remains the source of
+truth, and an immediate retry after a timeout may create a duplicate issue. This is
+an approved POC tradeoff — see [docs/assumptions.md](docs/assumptions.md).
 
 ### Manual ticket-creation validation
 

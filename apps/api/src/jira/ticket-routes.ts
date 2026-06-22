@@ -11,6 +11,7 @@ import {
   jiraNotConfiguredError,
   jiraNotConnectedError,
   jiraProjectInaccessibleError,
+  jiraStoredCredentialsRejectedError,
   jiraTaskUnsupportedError,
   jiraTimeoutError,
   jiraUnreachableError,
@@ -142,6 +143,8 @@ export function createTicketRouter(deps: TicketRouterDependencies): Router {
             response.status(422).json(jiraTaskUnsupportedError());
             return;
           case 'credentials_rejected':
+            response.status(502).json(jiraStoredCredentialsRejectedError());
+            return;
           case 'unavailable':
             response.status(502).json(jiraUnreachableError());
             return;

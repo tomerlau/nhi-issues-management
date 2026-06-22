@@ -19,6 +19,14 @@ export function jiraCredentialsRejectedError(): ApiError {
   return apiError('jira_credentials_rejected', 'Jira rejected the provided credentials.');
 }
 
+/** Jira rejected the stored connection's credentials during a later operation. */
+export function jiraStoredCredentialsRejectedError(): ApiError {
+  return apiError(
+    'jira_credentials_rejected',
+    'The stored Jira credentials were rejected. Reconnect Jira and try again.',
+  );
+}
+
 /** Jira was unreachable, returned an invalid response, or failed unexpectedly. */
 export function jiraUnreachableError(): ApiError {
   return apiError('jira_unreachable', 'Jira could not be reached. Please try again.');

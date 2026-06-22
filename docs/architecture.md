@@ -663,22 +663,38 @@ after the tenant replaces its connection.
 ### Sequential creation is not a distributed transaction (approved POC tradeoff)
 
 Jira issue creation and local provenance persistence are sequential and are not
-atomic. If Jira creates the issue but the provenance insert then fails (for
-example, the unique constraint rejects a duplicate), the domain service returns a
-distinct `persistence_failed` outcome and the route maps it to an opaque HTTP 500;
-the already-created Jira issue may remain untracked locally. There is deliberately
-no compensating deletion, retry, idempotency key, reconciliation worker, or queue.
-This is an explicitly approved POC simplification documented in
-`docs/assumptions.md`; the production alternative (an outbox or reconciliation
-process, or an idempotency key on creation) is noted there.
+atomic, so the application cannot guarantee that every issue Jira creates also has
+a local provenance row. Two distinct cases leave an issue untracked:
+
+- **Confirmed creation, failed provenance.** Jira confirms the creation and
+  returns the issue id and key, but the subsequent provenance insert fails (for
+  example, the unique constraint rejects a duplicate). The domain service returns a
+  distinct `persistence_failed` outcome and the route maps it to an opaque HTTP
+  500; the already-created Jira issue remains untracked locally.
+- **Unconfirmed creation after a timeout.** Jira may actually create the issue, but
+  the application times out or loses the response while waiting for it or reading
+  the response body. The application never learns the resulting issue id or key, so
+  it records no provenance and returns a timeout (`jira_timeout`, HTTP 504) even
+  though the issue may in fact exist in Jira.
+
+There is deliberately no idempotency key, durable operation tracking, safe-retry
+mechanism, reconciliation worker, compensating deletion, or queue/worker state
+machine. This is an explicitly approved POC simplification documented in
+`docs/assumptions.md`; the production alternative (an idempotent, durable creation
+workflow with operation tracking, safe retries, and reconciliation/recovery) is
+noted there. Jira remains the source of truth for which issues exist. Because the
+flow is not idempotent, an immediate retry after an unconfirmed timeout may create
+a duplicate Jira issue.
 
 ### Outcome-to-status mapping
 
 The route maps the domain outcomes to stable, sanitized HTTP responses: `created`
 → 201 `{ issueId, issueKey }`; `not_connected` → 409 `jira_not_connected`;
 `project_inaccessible` → 422 `jira_project_inaccessible`; `task_unsupported` → 422
-`jira_task_unsupported`; `credentials_rejected` and `unavailable` → 502
-`jira_unreachable`; `timeout` → 504 `jira_timeout`; `configuration_error` → 503
+`jira_task_unsupported`; `credentials_rejected` → 502 `jira_credentials_rejected`
+("The stored Jira credentials were rejected. Reconnect Jira and try again.");
+`unavailable` → 502 `jira_unreachable`; `timeout` → 504 `jira_timeout`;
+`configuration_error` → 503
 `jira_not_configured` (the encryption key is absent or the stored credential
 cannot be decrypted); and `persistence_failed` → 500 `internal_error`. An invalid
 body returns 400 `invalid_request` before any Jira call, and an unauthenticated
@@ -687,4 +703,7 @@ also apply `Cache-Control: no-store` to `/api/tickets`, so error responses on th
 credential-bearing route are never cached. Notably, for ticket creation a
 credential rejection maps to 502 (the connection was previously verified, so a
 later rejection is treated as an upstream failure) rather than the 422 used by the
-M5 connection endpoint.
+M5 connection endpoint. The two 502 cases are deliberately distinguished: a
+rejection of the stored credentials returns `jira_credentials_rejected` so the
+caller knows to reconnect Jira, while a network error, malformed or rate-limited
+response, or 5xx returns the generic `jira_unreachable`.

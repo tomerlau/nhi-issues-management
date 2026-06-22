@@ -371,22 +371,34 @@ cumulatively as later milestones add functionality.
     recording the same issue twice for a tenant and site.
 - **Sequential creation, not a distributed transaction (approved POC choice).**
   Jira creation and SQLite provenance persistence are sequential and not atomic,
-  and no pending record is written before Jira is called. If Jira creates the
-  issue but provenance persistence then fails, the result is `persistence_failed`
-  (HTTP 500) and the already-created Jira issue may remain untracked locally.
-  - **Production alternative:** a transactional outbox or a reconciliation
-    process that detects and links orphaned Jira issues, and/or an idempotency
-    key on creation to make retries safe.
-  - **Tradeoff:** the sequential flow keeps the POC small and avoids workers,
-    queues, idempotency keys, compensating deletion, and reconciliation, at the
-    cost of a narrow window in which a created Jira issue is not tracked locally.
-    Jira, not the application, remains authoritative, so an untracked issue is a
-    missing local pointer rather than lost data.
+  and no pending record is written before Jira is called. The application cannot
+  guarantee that every issue Jira creates has a local provenance row; two cases
+  leave an issue untracked:
+  - Jira confirms the creation but provenance persistence then fails, giving
+    `persistence_failed` (HTTP 500) with the already-created Jira issue untracked
+    locally.
+  - Jira may create the issue but the application times out or loses the response
+    while waiting for or reading it, so it never learns the issue id/key, records
+    no provenance, and returns a timeout (`jira_timeout`, HTTP 504) even though the
+    issue may exist in Jira.
+  - **Production alternative:** an idempotent, durable creation workflow with
+    operation tracking, safe retries, and a reconciliation/recovery process that
+    detects and links orphaned Jira issues.
+  - **Tradeoff:** the synchronous flow keeps the POC small and avoids idempotency
+    keys, durable operation tracking, safe retries, reconciliation, compensating
+    deletion, and queue/worker state machines, at the cost that not every created
+    Jira issue is guaranteed a local provenance row. Jira, not the application,
+    remains authoritative, so an untracked issue is a missing local pointer rather
+    than lost data. Because the flow is not idempotent, an immediate retry after an
+    unconfirmed timeout may create a duplicate Jira issue.
 - **Credential rejection during creation maps to 502, not 422.** The connection
   was previously verified at connect time, so a later credential rejection is
-  treated as an upstream failure (`jira_unreachable`) rather than the connect-time
-  `jira_credentials_rejected` (422). A missing encryption key or an undecryptable
-  stored credential maps to HTTP 503 `jira_not_configured`.
+  treated as an upstream failure rather than the connect-time 422. It returns its
+  own distinct 502 `jira_credentials_rejected` ("The stored Jira credentials were
+  rejected. Reconnect Jira and try again.") so the caller knows to reconnect,
+  separate from the generic 502 `jira_unreachable` used for a network error,
+  malformed or rate-limited response, or 5xx. A missing encryption key or an
+  undecryptable stored credential maps to HTTP 503 `jira_not_configured`.
 - **Deferred:** any frontend or ticket-creation UI; a recent-tickets list or
   read/query endpoints; editing, deleting, or transitioning issues; external
   application API-key authentication; Jira project discovery or search;

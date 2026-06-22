@@ -153,6 +153,25 @@ describe('ticket creation endpoint', () => {
       }
       expect(fetch).not.toHaveBeenCalled();
     });
+
+    it('rejects a request body over the size limit with a structured 400 and no Jira call', async () => {
+      storeConnection('tenant-acme', 'user-acme-alice');
+      const fetch = happyPathFetch();
+      const app = appWith(db, { encryptionKey, fetch });
+      const agent = await loginAgent(app, acmeAlice);
+      // Structurally valid JSON whose description pushes the body past the 10kb
+      // express.json limit, so the body parser rejects it before route handling.
+      const oversizedBody = { ...validBody, description: 'a'.repeat(11_000) };
+      const res = await agent.post('/api/tickets').send(oversizedBody);
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('invalid_request');
+      expect(res.headers['cache-control']).toBe('no-store');
+      expect(fetch).not.toHaveBeenCalled();
+      const dump = JSON.stringify(res.body);
+      expect(dump).not.toContain('aaaa');
+      expect(dump).not.toContain('entity too large');
+      expect(dump).not.toContain(PLAINTEXT_TOKEN);
+    });
   });
 
   describe('outcome mapping', () => {
@@ -195,14 +214,17 @@ describe('ticket creation endpoint', () => {
       expect(res.body.error.code).toBe('jira_task_unsupported');
     });
 
-    it('returns 502 when Jira rejects the credentials', async () => {
+    it('returns 502 with a distinct credential error when Jira rejects the stored credentials', async () => {
       storeConnection('tenant-acme', 'user-acme-alice');
       const fetch = vi.fn(async () => new Response('', { status: 401 })) as unknown as FetchLike;
       const app = appWith(db, { encryptionKey, fetch });
       const agent = await loginAgent(app, acmeAlice);
       const res = await agent.post('/api/tickets').send(validBody);
       expect(res.status).toBe(502);
-      expect(res.body.error.code).toBe('jira_unreachable');
+      expect(res.body.error.code).toBe('jira_credentials_rejected');
+      expect(res.body.error.message).toBe(
+        'The stored Jira credentials were rejected. Reconnect Jira and try again.',
+      );
     });
 
     it('returns 502 when Jira is unreachable', async () => {
@@ -216,6 +238,22 @@ describe('ticket creation endpoint', () => {
       expect(res.status).toBe(502);
       expect(res.body.error.code).toBe('jira_unreachable');
       expect(JSON.stringify(res.body)).not.toContain('ECONNREFUSED');
+    });
+
+    it('returns 502 jira_unreachable when Jira returns a 5xx on issue creation', async () => {
+      storeConnection('tenant-acme', 'user-acme-alice');
+      const fetch = vi.fn(async (_url: string, init?: RequestInit) => {
+        if ((init?.method ?? 'GET') === 'POST') {
+          return new Response('upstream boom internal-trace', { status: 503 });
+        }
+        return jsonResponse(VALID_PROJECT_BODY);
+      }) as unknown as FetchLike;
+      const app = appWith(db, { encryptionKey, fetch });
+      const agent = await loginAgent(app, acmeAlice);
+      const res = await agent.post('/api/tickets').send(validBody);
+      expect(res.status).toBe(502);
+      expect(res.body.error.code).toBe('jira_unreachable');
+      expect(JSON.stringify(res.body)).not.toContain('upstream boom');
     });
 
     it('returns 504 on a Jira timeout', async () => {
