@@ -1,7 +1,7 @@
 # Architecture
 
 This document describes the architecture that currently exists through
-Milestone 5. It intentionally avoids designing later domain layers in detail.
+Milestone 6. It intentionally avoids designing later domain layers in detail.
 
 ## Monorepo structure
 
@@ -21,7 +21,8 @@ because there is no genuine cross-application code to share.
 The frontend and backend are separate applications with separate dependency
 trees, build outputs, and lifecycles. They communicate only over HTTP. The
 frontend holds no backend secrets or configuration; it knows only relative `/api`
-endpoints — currently the authentication endpoints `/api/auth/*`. The backend
+endpoints — the authentication endpoints `/api/auth/*` and the Jira connection
+endpoints `/api/jira/connection`. The backend
 health endpoint `/api/health` remains available separately for liveness checks
 and is not part of the frontend authentication flow.
 

@@ -140,3 +140,95 @@ button:disabled {
   margin: 2rem auto;
   padding: 0 1.5rem;
 }
+
+.jira-panel {
+  margin-top: 2rem;
+  padding: 1.5rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+}
+
+.jira-panel h2 {
+  margin-top: 0;
+  font-size: 1.1rem;
+}
+
+.jira-shared-note {
+  color: var(--color-muted);
+  font-size: 0.9rem;
+}
+
+.jira-status {
+  margin: 1rem 0;
+}
+
+.jira-badge {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  margin-right: 0.4rem;
+  border-radius: 0.25rem;
+  background: var(--color-accent);
+  color: var(--color-accent-text);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.jira-details {
+  margin: 0.5rem 0 1rem;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.jira-details div {
+  display: flex;
+  flex-direction: column;
+}
+
+.jira-details dt {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-muted);
+}
+
+.jira-details dd {
+  margin: 0;
+  word-break: break-all;
+}
+
+.jira-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.jira-form h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.jira-form-actions {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.field-hint {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--color-muted);
+}
+
+.form-success {
+  margin: 0;
+  color: var(--color-accent);
+  font-size: 0.9rem;
+}
+
+button.secondary {
+  background: var(--color-surface);
+  color: var(--color-text);
+  border-color: var(--color-border);
+}

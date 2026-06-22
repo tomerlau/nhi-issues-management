@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { AuthError, logout, type SafeUser } from '../api/auth';
+import JiraConnectionPanel from './JiraConnectionPanel';
 
 interface AuthenticatedShellProps {
   user: SafeUser;
@@ -62,6 +63,7 @@ export default function AuthenticatedShell({ user, onLoggedOut }: AuthenticatedS
             {error}
           </p>
         )}
+        <JiraConnectionPanel />
       </main>
     </div>
   );

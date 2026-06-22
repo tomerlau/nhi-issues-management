@@ -2,19 +2,76 @@
 
 A focused proof of concept for integrating Oasis Security IdentityHub with Jira.
 
-This repository is built in milestones. The current milestone (Milestone 5)
-adds a backend-only Jira API-token connection: an authenticated user connects a
-Jira Cloud account by submitting a site URL, Atlassian email, and API token. The
-connection is a tenant-wide organization integration shared by all users in the
-tenant. The credentials are validated against Jira before storage, and the API
-token is encrypted at rest and never returned to the frontend.
+This repository is built in milestones. The current milestone (Milestone 6)
+adds the **Jira connection UI**: inside the authenticated application shell an
+authenticated user can view, create, and replace the tenant-wide Jira connection
+introduced by the Milestone 5 backend. The UI shows the shared connection status,
+explains that the connection is shared by everyone in the tenant, displays only
+the safe site URL and Atlassian email, and lets any tenant user replace the
+shared connection. The Atlassian API token is entered through an uncontrolled
+secret input, exists only transiently during submission, is cleared immediately
+once captured, and is never stored in React state or any browser storage.
 
 Earlier milestones added backend-only application authentication (globally
 unique user emails, Argon2id-hashed passwords, persistent server-side sessions,
-secure session cookies, and reusable authentication middleware) and the
-authenticated frontend application shell: initial session restoration, login and
+secure session cookies, and reusable authentication middleware), the
+authenticated frontend application shell (initial session restoration, login and
 logout, authenticated and unauthenticated states, loading states, and clear
-authentication and network errors.
+authentication and network errors), and a backend-only Jira API-token connection
+(a tenant-wide Jira Cloud connection validated against Jira before storage, with
+the API token encrypted at rest and never returned to the frontend).
+
+## Current milestone scope (Milestone 6: Jira connection UI)
+
+Frontend only; it consumes the unchanged Milestone 5 backend contract
+(`GET`/`POST /api/jira/connection`). No backend changes were made.
+
+Implemented:
+
+- A focused frontend Jira API module (`apps/web/src/api/jira.ts`) that calls the
+  two relative `/api/jira/connection` endpoints over the Vite proxy with the
+  same-origin session cookie. It defines safe connection-status types, loads the
+  current connection, and creates or replaces it. It validates success bodies
+  defensively (reading only the safe `connected`/`siteUrl`/`email` fields and
+  ignoring any unexpected credential-shaped fields), parses only the structured
+  `{ error: { code } }` envelope, and maps validation, credential, configuration,
+  timeout, unreachable, network, authentication, and unexpected-server failures
+  to distinct UI error kinds. It never logs requests, responses, credentials, or
+  raw backend/Jira error text.
+- A focused Jira connection panel (`apps/web/src/components/JiraConnectionPanel.tsx`)
+  rendered inside the existing authenticated shell. It shows loading,
+  disconnected, connected, and retryable load-error states; explains that the
+  connection is shared by the whole tenant; displays only the safe site URL and
+  email when connected; and lets any authenticated tenant user create or replace
+  the shared connection. Internal user/tenant/connection IDs, account IDs, audit
+  metadata, encrypted data, and credential material are never displayed.
+- Strict API-token secret handling in the form: the token input is `type="password"`,
+  uncontrolled, and read only via a DOM ref at submit time. The captured token is
+  cleared from the input immediately when submission starts (before the HTTP
+  response), is never placed in React state, props, context, or any browser
+  storage, and is never retained for a retry — a second attempt requires
+  re-entering the token. `siteUrl` and `email` use ordinary React state.
+- Submission behavior: duplicate submissions are prevented and controls are
+  disabled while a save is in flight, with clear loading text. Empty fields are
+  rejected client-side before any request (the backend remains the authoritative
+  Jira URL security policy). Success updates the displayed safe status and shows
+  whether the shared connection was created or replaced; a failure shows safe,
+  category-specific copy, keeps the previous connection visible and active, and
+  never implies it was removed.
+- Frontend tests (Vitest + React Testing Library) covering the API module
+  (endpoint paths/methods/body/credentials, response parsing, defensive handling
+  of malformed bodies, and the full error-code mapping) and the panel (all
+  states, successful initial connection and replacement, client validation,
+  duplicate-submit prevention, every error category, retry after a load failure,
+  preserved connection after a failed replacement, and the token secret-handling
+  rules).
+
+Explicitly **not** implemented in Milestone 6: any Jira project input,
+discovery, validation, or dropdown; ticket creation or a recent-tickets view; a
+reusable Jira backend client; a disconnect endpoint or button; OAuth / 3LO;
+scoped API-token support; roles, permissions, or tenant-admin UI; API-key
+functionality; browser credential persistence; global frontend state; and
+routing.
 
 ## Current milestone scope (Milestone 5: Jira API-token connection)
 
@@ -487,6 +544,100 @@ sqlite3 apps/api/data/app.db \
 
 The plaintext token must not appear in API logs, API responses, frontend state,
 generated files, the database token field, or `git status`.
+
+## Jira connection UI (Milestone 6)
+
+The authenticated application shell now includes a Jira connection panel
+(`apps/web/src/components/JiraConnectionPanel.tsx`) backed by a focused frontend
+API module (`apps/web/src/api/jira.ts`). It is the user-facing view of the
+tenant-wide Milestone 5 backend connection and adds no backend behavior.
+
+On mount the panel calls `GET /api/jira/connection` and renders one of four
+states:
+
+- **Loading** while the status request is in flight.
+- **Disconnected** — explains that the connection is shared by the whole tenant
+  and shows the connection form (Jira Cloud site URL, Atlassian account email,
+  and an unscoped Atlassian API token), with the expected
+  `https://<site>.atlassian.net` URL format made explicit.
+- **Connected** — shows that the tenant is connected, displays only the safe site
+  URL and Atlassian email returned by the backend, restates that the connection
+  is shared by the tenant, and offers a **Replace connection** action. Internal
+  IDs, account IDs, audit metadata, encrypted data, and credential material are
+  never shown.
+- **Retryable load error** — a safe message with a **Try again** action when the
+  status cannot be loaded.
+
+Creating or replacing the connection posts to `POST /api/jira/connection`.
+Duplicate submissions are prevented and the controls are disabled while the
+request is in flight. Empty fields are rejected client-side before any request;
+the backend remains the authoritative Jira URL security policy. On success the
+panel updates the displayed safe status and reports whether the shared connection
+was created or replaced. On failure it shows safe, category-specific copy
+(invalid input, rejected credentials, server not configured, timeout,
+unreachable, network failure, expired session, or a generic retryable error),
+keeps any existing connection visible and active, and never implies it was
+removed. Raw backend messages and credential material are never rendered.
+
+### How the API token is handled in the browser
+
+The Atlassian API token is treated as a secret in the form:
+
+- The token input is `type="password"` and **uncontrolled** — it is never bound
+  to React state.
+- The token is read only at submission time via a DOM ref, and the input is
+  **cleared immediately once captured**, before the HTTP response resolves.
+- The token exists only transiently in the local submit call and the outgoing
+  request body. It is never stored in React state, context, props, a store, or
+  any browser storage (`localStorage`, `sessionStorage`, IndexedDB, cookies),
+  and is never placed in URLs, logs, errors, analytics, or rendered output.
+- The token is never retained for a retry, and a request carrying a token is
+  never retried automatically: a second attempt requires re-entering the token.
+- `siteUrl` and `email` use ordinary local React state.
+
+It is expected that the submitted token is present transiently in the outgoing
+HTTPS request payload, which is visible to the user who owns the browser session;
+the application does not and cannot hide it from that user.
+
+### Manual validation: Jira connection UI (Milestone 6)
+
+With both apps running (`npm run dev`), the demo users seeded (`npm run seed`),
+and the encryption key configured (see
+[Setup: encryption key](#setup-encryption-key)), exercise the UI at
+http://localhost:5173. Steps 1, the happy path, and the replacement steps require
+a real Jira Cloud site, account email, and **unscoped** API token.
+
+1. **Happy path.** Sign in as Alice (`alice@example.com` / `acme-alice-demo`).
+   The Jira panel loads the **disconnected** state. Enter a valid Jira site URL,
+   Atlassian email, and unscoped API token, and connect. Confirm the panel shows
+   the **connected** state with the safe site URL and email only.
+2. **Same-tenant sharing.** In a separate browser profile or private window, sign
+   in as Bob (`bob@example.com` / `acme-bob-demo`). Confirm Bob sees the same
+   shared connection. Replace it as Bob, then refresh as Alice and confirm she
+   sees Bob's replacement.
+3. **Failed replacement.** As any Acme user, click **Replace connection** and
+   submit with an invalid token. Confirm an error appears, the previous
+   connection stays visible and labelled connected, and the token field is empty
+   and must be entered again.
+4. **Cross-tenant isolation.** Sign in as the Globex user
+   (`alice@globex.example.com` / `globex-alice-demo`) separately. Confirm the
+   Acme connection is not visible and Globex has its own independent
+   disconnected/connected state.
+5. **Failure paths.** Exercise, where practical: an invalid URL/input (HTTP, a
+   non-Atlassian host) → check-your-input copy; rejected credentials; a missing
+   server encryption key (start the API without `JIRA_CREDENTIAL_ENCRYPTION_KEY`)
+   → "not configured" copy; Jira timeout/unavailable behavior; an
+   application-server network failure (stop the API) → "unable to reach the
+   server" copy; and a status-load failure with the **Try again** retry.
+6. **Secret verification.** Using browser DevTools, confirm the token does not
+   appear in `localStorage`, `sessionStorage`, IndexedDB, cookies, the rendered
+   DOM after submission, API responses, or the console; and confirm it is absent
+   from application logs, the database token field, generated files, and
+   `git status`. It is expected that the submitted token appears transiently in
+   the outgoing HTTPS request payload visible to the browser's own user.
+7. **Regression.** Confirm session restoration on refresh, login, logout success,
+   and logout-failure behavior (stop the API, sign out → retryable error, stays
+   signed in) all continue to work with the panel mounted.
 
 ## Manual validation
 
