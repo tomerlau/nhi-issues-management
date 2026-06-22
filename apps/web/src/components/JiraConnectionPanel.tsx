@@ -20,6 +20,17 @@ type LoadState =
   | { status: 'error'; kind: JiraErrorKind }
   | { status: 'ready'; connection: JiraConnectionStatus };
 
+interface JiraConnectionPanelProps {
+  /**
+   * Reports whether the tenant's shared connection is currently loaded as
+   * connected. It fires `false` while loading, on a load error, and when
+   * disconnected, and `true` once a connected status is loaded or a save
+   * succeeds. The shell uses this to gate the ticket-creation panel without
+   * issuing a second connection-status request.
+   */
+  onConnectionChange?: (connected: boolean) => void;
+}
+
 /**
  * Tenant-wide Jira connection panel. It shows the shared connection status and
  * lets any authenticated tenant user create or replace the single connection.
@@ -29,7 +40,7 @@ type LoadState =
  * once captured (before the network request resolves), and it is never placed in
  * React state or any browser storage. siteUrl and email are ordinary state.
  */
-export default function JiraConnectionPanel() {
+export default function JiraConnectionPanel({ onConnectionChange }: JiraConnectionPanelProps) {
   const headingId = useId();
   const siteUrlId = useId();
   const siteUrlHintId = useId();
@@ -71,6 +82,14 @@ export default function JiraConnectionPanel() {
     refresh(controller.signal);
     return () => controller.abort();
   }, [refresh]);
+
+  // Report the loaded connection state upward so the shell can gate the
+  // ticket-creation panel. Only a successfully loaded connected status counts;
+  // loading, errors, and the disconnected state all report `false`.
+  const connectedNow = load.status === 'ready' && load.connection.connected;
+  useEffect(() => {
+    onConnectionChange?.(connectedNow);
+  }, [connectedNow, onConnectionChange]);
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();

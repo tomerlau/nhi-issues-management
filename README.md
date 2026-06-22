@@ -2,11 +2,16 @@
 
 A focused proof of concept for integrating Oasis Security IdentityHub with Jira.
 
-This repository is built in milestones. The current milestone (Milestone 8)
-adds a backend-only ticket-creation domain service: an authenticated
-`POST /api/tickets` endpoint that creates a fixed-`Task` Jira Cloud issue against
-the tenant's shared connection and records minimal local provenance for the
-created issue. It builds on the Milestone 7 integration layer.
+This repository is built in milestones. The current milestone (Milestone 9)
+adds the frontend ticket-creation UI: an authenticated user whose tenant is
+connected to Jira can create an NHI finding ticket from the application shell. It
+is frontend only and consumes the unchanged Milestone 8 `POST /api/tickets`
+contract; no backend behavior changed.
+
+Milestone 8 added the backend-only ticket-creation domain service this builds on:
+an authenticated `POST /api/tickets` endpoint that creates a fixed-`Task` Jira
+Cloud issue against the tenant's shared connection and records minimal local
+provenance for the created issue. It builds on the Milestone 7 integration layer.
 
 Milestone 7 added the backend-only Jira integration layer this builds on: one
 central Jira client and a tenant-scoped integration service that validates a Jira
@@ -87,7 +92,52 @@ scoped API-token support; roles, permissions, or tenant-admin UI; API-key
 functionality; browser credential persistence; global frontend state; and
 routing.
 
-## Current milestone scope (Milestone 8: Ticket creation domain service)
+## Current milestone scope (Milestone 9: Ticket creation UI)
+
+Frontend only; it consumes the unchanged Milestone 8 backend contract
+(`POST /api/tickets`). No backend changes were made. Milestone 9 lets an
+authenticated user whose tenant is connected to Jira create an NHI finding ticket
+from the application shell.
+
+Implemented:
+
+- A focused frontend ticket API module (`apps/web/src/api/tickets.ts`) that posts
+  the relative `/api/tickets` endpoint with the same-origin session cookie, sends
+  exactly `projectKey`/`title`/`description`, defensively validates the success
+  body, maps every documented backend error code (plus 401, network, and
+  unexpected outcomes) to safe UI error kinds, never renders raw backend/Jira
+  text, never logs, and never retries.
+- A focused `TicketCreationPanel` component
+  (`apps/web/src/components/TicketCreationPanel.tsx`) with accessible labels,
+  `role="alert"`/`role="status"` feedback, client-side usability validation
+  matching the documented limits, uppercase project-key normalization, disabled
+  controls and duplicate-submit prevention while pending, clear success feedback
+  including the returned issue key (clearing the title/description and keeping the
+  project key), and a distinct uncertain-outcome warning for timeout/generic
+  upstream failures advising the user to check Jira before retrying.
+- Integration into the authenticated shell: `JiraConnectionPanel` reports the
+  loaded connection state to `AuthenticatedShell` through a small callback, and the
+  shell renders the ticket panel only when the tenant connection has loaded as
+  connected — with no second connection-status request. Login, logout, session
+  restoration, and the Jira connection flow are unchanged.
+- Frontend tests (Vitest + React Testing Library) covering the ticket API module
+  (path/method/headers/credentials/body, success parsing, malformed-body
+  rejection, the full error-code mapping, 401/unknown-status/unknown-code
+  fallbacks, network failure, raw-message suppression, and no automatic retry),
+  the panel (connected rendering, validation, normalization, payload, loading and
+  disabled controls, duplicate-submit prevention, success and field-clearing
+  behavior, every error category, the uncertain-outcome warning, and accessible
+  alert/status behavior), and the shell gating (ticket form appears only when
+  connected; hidden while loading, on a load error, and when disconnected).
+
+Explicitly **not** implemented in Milestone 9: any Jira project discovery,
+search, or dropdown; issue-type selection or configurable issue types; Jira custom
+fields; a recent-tickets list or endpoint integration; ticket links; ticket
+editing, deletion, or transitions; webhook synchronization; external API-key
+authentication or a REST API for external callers; routing or global frontend
+state; and any M10/M11/M12/M13 functionality.
+
+## Earlier milestone scope (Milestone 8: Ticket creation domain service)
 
 Backend only. Milestone 8 adds the first ticket-creation flow: an authenticated
 user creates a fixed-`Task` Jira issue in a project against the tenant's shared
@@ -897,6 +947,136 @@ What to confirm:
 sqlite3 apps/api/data/app.db \
   'SELECT tenant_id, created_by_user_id, jira_site_url, jira_project_key, jira_issue_key FROM jira_ticket_provenance;'
 ```
+
+## Ticket creation UI (Milestone 9)
+
+The authenticated application shell now lets a user whose tenant is connected to
+Jira create an NHI finding ticket. It is **frontend only**: a focused frontend
+ticket API module (`apps/web/src/api/tickets.ts`) and a `TicketCreationPanel`
+component (`apps/web/src/components/TicketCreationPanel.tsx`) consume the
+unchanged Milestone 8 `POST /api/tickets` contract over the Vite proxy with the
+same-origin session cookie. No backend behavior changed.
+
+### When the form appears
+
+The ticket-creation panel is rendered **only after** the tenant's shared Jira
+connection status has loaded successfully as *connected*. The existing
+`JiraConnectionPanel` reports the loaded connection state up to the shell through
+a small callback, so the shell gates the ticket panel without issuing a second
+connection-status request. While the status is loading, on a status-load error,
+and when the tenant is disconnected, the ticket form is not shown.
+
+### Form fields and validation
+
+The form sends exactly three fields and nothing else (`tenantId`, the creating
+`userId`, the connection, the site URL, and the fixed `Task` issue type all come
+from the server-side session and backend):
+
+| Field         | Client-side usability limit                                                       |
+| ------------- | --------------------------------------------------------------------------------- |
+| Project key   | Normalized to uppercase; 2–10 characters matching `^[A-Z][A-Z0-9]+$`.              |
+| Title         | Non-empty after trimming; at most 255 characters.                                 |
+| Description   | Non-empty after trimming; at most 5000 characters; internal line breaks preserved. |
+
+Client-side validation only improves usability and is **not** a security
+boundary; the backend remains authoritative. Invalid local input is reported
+inline and no network request is made.
+
+### Success and safe error behavior
+
+On HTTP 201 the panel shows clear success feedback including the returned Jira
+issue key (for example `SCRUM-6`), then clears the title and description while
+**keeping the project key** so the user can file another ticket in the same
+project. Submission controls are disabled while a request is in flight and
+duplicate submissions are prevented, so repeated clicks produce only one request.
+
+Every documented backend failure maps to safe, category-specific copy; raw
+backend or Jira messages, technical error codes, credentials, session values, and
+internal IDs are never rendered:
+
+| Backend code (status)                | Frontend behavior                                         |
+| ------------------------------------ | --------------------------------------------------------- |
+| `invalid_request` (400)              | Check the project key, title, and description.            |
+| `unauthenticated` (401)              | Session no longer valid — sign in again.                  |
+| `jira_not_connected` (409)           | Tenant no longer connected — connect Jira and try again.  |
+| `jira_project_inaccessible` (422)    | Project not found or not accessible — check the key.       |
+| `jira_task_unsupported` (422)        | Project does not support the `Task` issue type.           |
+| `jira_credentials_rejected` (502)    | Stored credentials rejected — reconnect Jira.            |
+| `jira_unreachable` (502)             | **Uncertain outcome** (see below).                        |
+| `jira_timeout` (504)                 | **Uncertain outcome** (see below).                        |
+| `jira_not_configured` (503)          | Jira integration not configured on the server.            |
+| `internal_error` (500) / unexpected  | Generic "something went wrong" copy.                      |
+| Browser/server network failure       | Unable to reach the server — check your connection.       |
+
+### Uncertain outcomes and the POC duplicate-creation risk
+
+Milestone 8 documents that ticket creation is **not** idempotent: on a timeout
+(`jira_timeout`) or a generic upstream failure (`jira_unreachable`) Jira may or
+may not have created the issue, and an immediate retry can create a duplicate. The
+UI surfaces this directly: for those two outcomes it shows a distinct warning that
+the ticket *may* have been created and that the user should **check Jira before
+retrying**, because retrying may create a duplicate. The frontend never retries a
+ticket creation automatically.
+
+### How the request is kept safe
+
+The ticket API module sends only `projectKey`, `title`, and `description` with
+`credentials: 'same-origin'`; it never sends a tenant, user, connection, site, or
+issue-type field, defensively validates the success body (reading only the safe
+`issueId`/`issueKey`), parses only the structured `{ error: { code } }` envelope,
+never renders raw backend/Jira text, never logs requests/responses/errors, and
+never retries. Form contents are held only in transient React state and are never
+written to `localStorage`, `sessionStorage`, IndexedDB, cookies, the URL, or any
+global state.
+
+### Manual validation: ticket creation UI (Milestone 9)
+
+With both apps running (`npm run dev`), the demo users seeded (`npm run seed`),
+and the encryption key configured (see
+[Setup: encryption key](#setup-encryption-key)), exercise the UI at
+http://localhost:5173. Steps that create a real Jira issue require a real Jira
+Cloud site, account email, an **unscoped** API token, and a project the account
+can create `Task` issues in.
+
+1. **Sign in with a connected tenant.** Sign in as a tenant user (e.g.
+   `alice@example.com` / `acme-alice-demo`) whose tenant already has a valid Jira
+   connection (connect first via the Jira connection panel if needed). Confirm the
+   **Create a Jira ticket** form appears below the connection panel.
+2. **Create a real ticket.** Enter a project key, title, and a multi-line
+   description, and submit. Confirm in Jira that the issue was created in the
+   **correct project**, as a fixed **`Task`**, with the title mapped to the summary
+   and the description preserved (including internal line breaks), and that the UI
+   shows the returned **issue key**.
+3. **Project-key normalization.** Enter the project key in lowercase and confirm
+   it is displayed and submitted as uppercase.
+4. **Local validation.** Submit with empty fields, an over-255-character title, or
+   an over-5000-character description, and confirm each is rejected inline before
+   any network request (DevTools Network shows no `POST /api/tickets`).
+5. **Inaccessible project / unsupported Task.** Use a project key the connection
+   cannot access (→ inaccessible copy) and, if available, a project with no
+   non-subtask `Task` type (→ unsupported-Task copy).
+6. **Disconnected tenant.** As a tenant with no Jira connection, confirm the
+   ticket form does not appear at all.
+7. **Stored-credential rejection.** With a connection whose token has been revoked
+   or rotated, attempt a creation and confirm the reconnect guidance appears.
+8. **Timeout / network uncertainty.** Simulate a slow/unavailable upstream (or
+   stop the API mid-request) and confirm the uncertain-outcome warning to check
+   Jira before retrying appears, and that the app does not retry automatically.
+9. **Duplicate-submit prevention.** Click **Create ticket** repeatedly while a
+   request is pending and confirm exactly one `POST /api/tickets` is sent.
+10. **Shared connection, real provenance.** Have two users in the same tenant each
+    create a ticket through the shared connection and confirm the backend
+    provenance rows record the actual creating user (see the Milestone 8 query).
+11. **Cross-tenant isolation.** Confirm a different tenant neither sees nor can use
+    the first tenant's Jira connection.
+12. **Regression.** Confirm login, logout, session restoration on refresh, and the
+    Jira connection replacement flow all continue to work with the ticket panel
+    mounted.
+13. **No sensitive data leaks.** Using DevTools, confirm no credentials, session
+    values, raw Jira content, internal IDs, or form contents appear in the DOM
+    after submission, browser storage (`localStorage`, `sessionStorage`,
+    IndexedDB, cookies), the console, network responses, the URL, generated files,
+    or `git status`.
 
 ## Jira connection UI (Milestone 6)
 
