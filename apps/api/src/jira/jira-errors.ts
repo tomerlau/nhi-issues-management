@@ -1,0 +1,30 @@
+import type { ApiError } from '../auth/errors.js';
+
+/**
+ * Sanitized error envelopes for the Jira connection endpoints. They reuse the
+ * shared `ApiError` shape and intentionally never carry raw Jira response
+ * bodies, tokens, authorization headers, or internal exception messages.
+ */
+function apiError(code: string, message: string): ApiError {
+  return { error: { code, message } };
+}
+
+/** The encryption key is not configured, so credentials cannot be stored. */
+export function jiraNotConfiguredError(): ApiError {
+  return apiError('jira_not_configured', 'Jira integration is not configured.');
+}
+
+/** Jira rejected the submitted email/API-token pair. */
+export function jiraCredentialsRejectedError(): ApiError {
+  return apiError('jira_credentials_rejected', 'Jira rejected the provided credentials.');
+}
+
+/** Jira was unreachable, returned an invalid response, or failed unexpectedly. */
+export function jiraUnreachableError(): ApiError {
+  return apiError('jira_unreachable', 'Jira could not be reached. Please try again.');
+}
+
+/** The Jira request exceeded the verifier timeout. */
+export function jiraTimeoutError(): ApiError {
+  return apiError('jira_timeout', 'The Jira request timed out. Please try again.');
+}
