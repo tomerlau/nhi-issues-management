@@ -44,7 +44,10 @@ Carried over from earlier milestones:
 - Backend-only cookie authentication: `POST /api/auth/login`,
   `GET /api/auth/session`, `POST /api/auth/logout`, Argon2id password hashing,
   and SQLite-backed sessions storing only the SHA-256 hash of an opaque 256-bit
-  token. The backend contract is unchanged in this milestone.
+  token. M4 includes one focused M3 contract correction: session restoration now
+  returns HTTP 200 with `{ user: null }` for the normal unauthenticated case
+  instead of HTTP 401. Login and logout behavior are unchanged, and genuine
+  protected routes still return HTTP 401 when unauthenticated.
 - npm-workspaces monorepo with separate `apps/api` (backend) and `apps/web` (frontend).
 - SQLite persistence using the built-in Node.js 24 `node:sqlite` module (no ORM, no external SQLite library).
 - Versioned, transactional, idempotent SQL migrations run by a minimal in-repo migration runner.

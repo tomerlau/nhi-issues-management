@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="IdentityHub">
+  <rect width="32" height="32" rx="6" fill="#2456c4" />
+  <path d="M16 5l9 3v7c0 6-3.8 9.6-9 12-5.2-2.4-9-6-9-12V8l9-3z" fill="#ffffff" />
+  <circle cx="16" cy="14" r="3" fill="#2456c4" />
+  <rect x="14.6" y="14" width="2.8" height="6" rx="1.4" fill="#2456c4" />
+</svg>
