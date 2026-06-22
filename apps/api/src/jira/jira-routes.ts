@@ -66,8 +66,11 @@ export function createJiraRouter(deps: JiraRouterDependencies): Router {
     next();
   });
 
-  // Every Jira endpoint requires an authenticated application session. tenantId
-  // and userId come solely from the session, never from request input.
+  // Every Jira endpoint requires an authenticated application session. The
+  // connection is tenant-wide: tenantId and the acting userId come solely from
+  // the session. Any client-supplied tenantId, userId, configuredByUserId, or
+  // connectionId in the request is ignored (the body validator reads only
+  // siteUrl, email, and apiToken).
   router.use(requireAuth);
 
   // Built only when a key is present; otherwise endpoints report 503.

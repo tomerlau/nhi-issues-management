@@ -292,12 +292,19 @@ even though both rows are valid and the foreign keys are satisfied. A user ID
 alone is never treated as sufficient scope; the tenant boundary is always
 required.
 
-## Jira connection (Milestone 5)
+## Jira connection (Milestone 5, corrected to tenant-wide ownership)
 
-Milestone 5 lets an authenticated user connect their own Jira Cloud account with
-a site URL, Atlassian email, and API token. It is backend only and reuses the
-existing authentication trust boundary: `tenantId` and `userId` come solely from
-the session, never from request input.
+Milestone 5 lets authenticated users connect a Jira Cloud account with a site
+URL, Atlassian email, and API token. It is backend only and reuses the existing
+authentication trust boundary: `tenantId` and the acting `userId` come solely
+from the session, never from request input.
+
+The Jira connection is a **tenant-wide organization integration shared by every
+user in the tenant**, not a per-user connection. Any authenticated user in a
+tenant can read the safe connection status and any of them can create or replace
+the single shared connection. Users in other tenants can never read, use, or
+replace it. (This corrects the original Milestone 5 model, which stored one
+connection per `(tenant_id, user_id)`.)
 
 ### Connection boundary and ownership
 
@@ -305,11 +312,40 @@ the session, never from request input.
 (`jira-routes.ts`) sit behind `requireAuth`, validate input, and delegate to
 `JiraConnectionService`, which orchestrates verification, encryption, and
 persistence. The `JiraConnectionRepository` follows the existing explicit,
-tenant-scoped SQLite style: every read and write requires both `tenantId` and
-`userId`, there is no lookup by connection id or user id alone, and the
-`jira_connections` table carries a composite foreign key into
-`users(tenant_id, id)` plus a `UNIQUE (tenant_id, user_id)` constraint enforcing
-one connection per user. Reconnection updates only the owner's own row.
+tenant-scoped SQLite style: every read and write requires `tenantId`, there is
+no lookup or mutation path by connection id, user id, or any client-provided
+ownership field, and the `jira_connections` table carries a composite foreign
+key from `(tenant_id, configured_by_user_id)` into `users(tenant_id, id)` plus a
+`UNIQUE (tenant_id)` constraint enforcing exactly one connection per tenant.
+Creating or replacing the connection upserts by `tenantId` alone: a replacement
+updates the existing row in place, preserving its `id` while rewriting the
+connection fields, the encrypted token, `configured_by_user_id`, and
+`updated_at`.
+
+`configured_by_user_id` records the user who last successfully configured the
+connection, for audit only. It is **not** an authorization boundary: any tenant
+user may replace the connection regardless of who configured it last. This is a
+deliberate POC simplification — see the production alternative in
+`docs/assumptions.md` (only authorized tenant administrators manage the shared
+integration). A failed verification or replacement never touches the stored row,
+so an existing valid connection survives a failed replacement unchanged.
+
+### Migration to tenant-wide ownership (migration 004)
+
+`004_jira_connection_tenant_wide.sql` rebuilds `jira_connections`, replacing
+`user_id` with `configured_by_user_id`, swapping the `UNIQUE (tenant_id, user_id)`
+constraint for `UNIQUE (tenant_id)`, and re-pointing the composite foreign key at
+`(tenant_id, configured_by_user_id)`. SQLite cannot alter a constraint in place,
+so the table is recreated (create new, copy, drop, rename) inside the migrator's
+transaction with foreign keys enabled, which is safe because nothing references
+`jira_connections`. Existing rows are preserved where possible: the previous
+`user_id` is carried over verbatim as `configured_by_user_id` so the stored
+ciphertext — whose AAD binds `(tenant_id, user_id)` — stays decryptable. Because
+the old schema permitted one row per `(tenant_id, user_id)`, a tenant may hold
+several legacy rows while the new schema allows only one; the migration
+deterministically retains exactly one per tenant, choosing the greatest
+`updated_at` and breaking ties by the greatest `id`. The migration is forward
+only and, like every migration, is recorded once and skipped on re-run.
 
 ### Credential verification flow
 
@@ -341,12 +377,18 @@ redirect destinations.
 SQLite. Each encryption uses a fresh random 12-byte nonce, and the serialized
 value is a versioned, dot-separated format (`v1.<nonce>.<ciphertext>.<authTag>`).
 Additional authenticated data binds the ciphertext to the credential
-type/version and the owning `(tenantId, userId)`, so a stored value cannot be
-moved to a different owner and decrypted, and any tampering fails the
-authentication tag. The AAD is encoded as a fixed-order JSON array rather than a
-delimiter-joined string, so a field value that itself contains the delimiter can
-never forge a field boundary (e.g. tenant `a:b`/user `c` and tenant `a`/user
-`b:c` produce distinct AAD). The 32-byte key comes from
+type/version and the credential context `(tenantId, configuredByUserId)`, so a
+stored value cannot be moved to a different context and decrypted, and any
+tampering fails the authentication tag. The AAD byte layout is unchanged from the
+original per-user model — its fourth field was the owning user id and is now the
+`configuredByUserId` carried over by migration 004 — so existing ciphertext
+stays decryptable. Future decryption must therefore use the
+`configured_by_user_id` stored on the connection row (the last successful
+configurer), not the id of whoever is currently making a request. The AAD is
+encoded as a fixed-order JSON array rather than a delimiter-joined string, so a
+field value that itself contains the delimiter can never forge a field boundary
+(e.g. tenant `a:b`/user `c` and tenant `a`/user `b:c` produce distinct AAD). The
+32-byte key comes from
 `JIRA_CREDENTIAL_ENCRYPTION_KEY` (canonical standard base64), resolved at startup
 in `config/jira-crypto.ts`. Decoding is strict: the value must match the standard
 base64 alphabet with valid padding and re-encode back to exactly the input (which

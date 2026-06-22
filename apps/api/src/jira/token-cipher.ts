@@ -4,10 +4,14 @@ import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
  * Authenticated encryption for the Jira API token before it is written to
  * SQLite. AES-256-GCM with a fresh random nonce per encryption and additional
  * authenticated data (AAD) that binds the ciphertext to the credential
- * type/version and its owning (tenantId, userId). Because the AAD is
- * authenticated, a ciphertext encrypted for one owner cannot be decrypted under
- * a different ownership context, and tampering with the serialized value fails
- * the authentication tag.
+ * type/version and the credential context (tenantId, configuredByUserId). Because
+ * the AAD is authenticated, a ciphertext encrypted in one context cannot be
+ * decrypted under a different context, and tampering with the serialized value
+ * fails the authentication tag.
+ *
+ * The connection is tenant-wide, so future decryption must use the
+ * `configuredByUserId` stored on the connection row (the user who last configured
+ * it), not the id of whoever is currently making a request.
  *
  * Serialized format (versioned, dot-separated base64 fields):
  *   v1.<nonce>.<ciphertext>.<authTag>
@@ -23,24 +27,36 @@ const AUTH_TAG_BYTES = 16;
 const CREDENTIAL_TYPE = 'jira-api-token';
 const CREDENTIAL_VERSION = '1';
 
-/** The ownership context an encrypted credential is bound to. */
+/** The credential context an encrypted credential is bound to. */
 export interface CredentialContext {
   tenantId: string;
-  userId: string;
+  /** The user who configured the connection; stored on the connection row. */
+  configuredByUserId: string;
 }
 
 /**
  * Build the additional authenticated data. The fields are encoded as a JSON
  * array with a fixed element order so the boundaries between them are
  * unambiguous. A delimiter-joined string (e.g. `a:b:c`) is ambiguous because a
- * field value may itself contain the delimiter — tenantId `a:b` + userId `c`
- * and tenantId `a` + userId `b:c` would produce identical AAD and could be
- * substituted for one another. JSON string encoding escapes the contents so no
- * field value can ever forge a boundary.
+ * field value may itself contain the delimiter — tenantId `a:b` +
+ * configuredByUserId `c` and tenantId `a` + configuredByUserId `b:c` would
+ * produce identical AAD and could be substituted for one another. JSON string
+ * encoding escapes the contents so no field value can ever forge a boundary.
+ *
+ * The byte layout is the fixed order [credential type, credential version,
+ * tenantId, configuredByUserId]; this matches the layout written before the
+ * connection became tenant-wide (its fourth field was the owning user id, which
+ * is now carried over as configuredByUserId), so existing ciphertext stays
+ * decryptable.
  */
 function buildAad(context: CredentialContext): Buffer {
   return Buffer.from(
-    JSON.stringify([CREDENTIAL_TYPE, CREDENTIAL_VERSION, context.tenantId, context.userId]),
+    JSON.stringify([
+      CREDENTIAL_TYPE,
+      CREDENTIAL_VERSION,
+      context.tenantId,
+      context.configuredByUserId,
+    ]),
     'utf8',
   );
 }

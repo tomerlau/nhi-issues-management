@@ -184,7 +184,7 @@ describe('jira connection endpoints', () => {
       expect(fetchSpy).not.toHaveBeenCalled();
     });
 
-    it('ignores client-supplied tenant/user identifiers', async () => {
+    it('ignores client-supplied ownership identifiers', async () => {
       const app = appWith(db, { encryptionKey, fetch: okFetch() });
       const agent = await loginAgent(app, acmeAlice);
 
@@ -194,13 +194,18 @@ describe('jira connection endpoints', () => {
         apiToken: VALID_TOKEN,
         tenantId: 'tenant-globex',
         userId: 'user-globex-alice',
+        configuredByUserId: 'user-globex-alice',
+        connectionId: 'spoofed-id',
       });
 
-      // The connection is owned by the session user (acme alice), not the spoofed ids.
+      // The connection belongs to the session tenant (acme) and records the
+      // session user as configurer, never the spoofed identifiers.
       const rows = db
-        .prepare('SELECT tenant_id, user_id FROM jira_connections')
-        .all() as { tenant_id: string; user_id: string }[];
-      expect(rows).toEqual([{ tenant_id: 'tenant-acme', user_id: 'user-acme-alice' }]);
+        .prepare('SELECT tenant_id, configured_by_user_id FROM jira_connections')
+        .all() as { tenant_id: string; configured_by_user_id: string }[];
+      expect(rows).toEqual([
+        { tenant_id: 'tenant-acme', configured_by_user_id: 'user-acme-alice' },
+      ]);
     });
   });
 
@@ -308,7 +313,7 @@ describe('jira connection endpoints', () => {
       expect(after).toEqual(before);
     });
 
-    it('replaces only the current user connection on successful reconnection', async () => {
+    it('replaces the shared tenant connection in place, preserving its id', async () => {
       const app = appWith(db, { encryptionKey, fetch: okFetch() });
       const agent = await loginAgent(app, acmeAlice);
       await agent
@@ -325,42 +330,87 @@ describe('jira connection endpoints', () => {
         site_url: string;
       }[];
       expect(rows).toHaveLength(1);
-      // Same owner row is updated in place (id preserved), not duplicated.
+      // The single tenant row is updated in place (id preserved), not duplicated.
       expect(rows[0].id).toBe(firstId);
       expect(rows[0].site_url).toBe('https://acme3.atlassian.net');
     });
   });
 
-  describe('tenant and user isolation', () => {
-    it('keeps two users in the same tenant isolated', async () => {
+  describe('tenant-wide sharing', () => {
+    it('shares one connection across same-tenant users, with replacement and audit', async () => {
       const app = appWith(db, { encryptionKey, fetch: okFetch() });
       const alice = await loginAgent(app, acmeAlice);
       const bob = await loginAgent(app, acmeBob);
 
+      // The tenant starts with no connection for either user.
+      expect((await alice.get('/api/jira/connection')).body).toEqual({ connected: false });
+      expect((await bob.get('/api/jira/connection')).body).toEqual({ connected: false });
+
+      // Alice creates the Acme tenant connection.
       await alice
         .post('/api/jira/connection')
         .send({ siteUrl: 'https://alice.atlassian.net', email: acmeAlice.email, apiToken: VALID_TOKEN });
 
-      // Bob sees no connection of his own.
-      expect((await bob.get('/api/jira/connection')).body).toEqual({ connected: false });
+      // Bob, another Acme user, sees the same shared connection.
+      expect((await bob.get('/api/jira/connection')).body).toEqual({
+        connected: true,
+        siteUrl: 'https://alice.atlassian.net',
+        email: acmeAlice.email,
+      });
 
+      const created = db
+        .prepare('SELECT id, configured_by_user_id FROM jira_connections')
+        .get() as { id: string; configured_by_user_id: string };
+      expect(created.configured_by_user_id).toBe('user-acme-alice');
+
+      // Bob successfully replaces the Acme connection.
       await bob
         .post('/api/jira/connection')
         .send({ siteUrl: 'https://bob.atlassian.net', email: acmeBob.email, apiToken: VALID_TOKEN });
 
-      expect((await alice.get('/api/jira/connection')).body.siteUrl).toBe('https://alice.atlassian.net');
-      expect((await bob.get('/api/jira/connection')).body.siteUrl).toBe('https://bob.atlassian.net');
+      // Alice sees Bob's replacement.
+      expect((await alice.get('/api/jira/connection')).body).toEqual({
+        connected: true,
+        siteUrl: 'https://bob.atlassian.net',
+        email: acmeBob.email,
+      });
 
-      const owners = db
-        .prepare('SELECT tenant_id, user_id, site_url FROM jira_connections ORDER BY user_id')
-        .all();
-      expect(owners).toEqual([
-        { tenant_id: 'tenant-acme', user_id: 'user-acme-alice', site_url: 'https://alice.atlassian.net' },
-        { tenant_id: 'tenant-acme', user_id: 'user-acme-bob', site_url: 'https://bob.atlassian.net' },
+      // Exactly one row, same id, and configured_by_user_id now records Bob.
+      const rows = db
+        .prepare('SELECT id, tenant_id, configured_by_user_id FROM jira_connections')
+        .all() as { id: string; tenant_id: string; configured_by_user_id: string }[];
+      expect(rows).toEqual([
+        { id: created.id, tenant_id: 'tenant-acme', configured_by_user_id: 'user-acme-bob' },
       ]);
     });
 
-    it('keeps users in different tenants isolated', async () => {
+    it('preserves the existing shared row completely when a replacement fails', async () => {
+      // Alice connects successfully.
+      const okApp = appWith(db, { encryptionKey, fetch: okFetch('acc-keep') });
+      const alice = await loginAgent(okApp, acmeAlice);
+      await alice
+        .post('/api/jira/connection')
+        .send({ siteUrl: VALID_SITE, email: acmeAlice.email, apiToken: VALID_TOKEN });
+
+      const before = db.prepare('SELECT * FROM jira_connections').get() as Record<string, unknown>;
+
+      // Bob's replacement is rejected by Jira; the shared row must be untouched.
+      const failFetch = vi.fn(async () => new Response('', { status: 401 })) as unknown as FetchLike;
+      const failApp = appWith(db, { encryptionKey, fetch: failFetch });
+      const bob = await loginAgent(failApp, acmeBob);
+      const res = await bob
+        .post('/api/jira/connection')
+        .send({ siteUrl: 'https://bob.atlassian.net', email: acmeBob.email, apiToken: 'bad' });
+      expect(res.status).toBe(422);
+
+      const after = db.prepare('SELECT * FROM jira_connections').get() as Record<string, unknown>;
+      // Every field — id, connection details, encrypted token, configured_by_user_id,
+      // and timestamps — is preserved.
+      expect(after).toEqual(before);
+      expect(after.configured_by_user_id).toBe('user-acme-alice');
+    });
+
+    it('keeps tenants isolated and lets each tenant hold its own connection', async () => {
       const app = appWith(db, { encryptionKey, fetch: okFetch() });
       const acme = await loginAgent(app, acmeAlice);
       const globex = await loginAgent(app, globexAlice);
@@ -369,7 +419,24 @@ describe('jira connection endpoints', () => {
         .post('/api/jira/connection')
         .send({ siteUrl: 'https://acme.atlassian.net', email: acmeAlice.email, apiToken: VALID_TOKEN });
 
+      // A Globex user cannot see the Acme connection.
       expect((await globex.get('/api/jira/connection')).body).toEqual({ connected: false });
+
+      // Globex creates its own independent connection; Acme's is unchanged.
+      await globex
+        .post('/api/jira/connection')
+        .send({ siteUrl: 'https://globex.atlassian.net', email: globexAlice.email, apiToken: VALID_TOKEN });
+
+      expect((await acme.get('/api/jira/connection')).body.siteUrl).toBe('https://acme.atlassian.net');
+      expect((await globex.get('/api/jira/connection')).body.siteUrl).toBe('https://globex.atlassian.net');
+
+      const rows = db
+        .prepare('SELECT tenant_id, site_url FROM jira_connections ORDER BY tenant_id')
+        .all();
+      expect(rows).toEqual([
+        { tenant_id: 'tenant-acme', site_url: 'https://acme.atlassian.net' },
+        { tenant_id: 'tenant-globex', site_url: 'https://globex.atlassian.net' },
+      ]);
     });
   });
 
