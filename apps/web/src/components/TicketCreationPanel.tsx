@@ -75,8 +75,9 @@ function validate(
  *
  * The issue type is always the project's `Task` type, chosen by the backend; this
  * form sends only the project key, title, and description. Submissions are guarded
- * against duplicates and are never retried automatically: an uncertain outcome
- * (timeout or generic upstream failure) warns the user to check Jira first.
+ * against duplicates and are never retried automatically: because creation is not
+ * idempotent, any uncertain outcome (timeout, unreachable, network, or an
+ * unexpected server failure) warns the user to check Jira before retrying.
  */
 export default function TicketCreationPanel() {
   const headingId = useId();

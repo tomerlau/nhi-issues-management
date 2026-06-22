@@ -113,8 +113,10 @@ Implemented:
   matching the documented limits, uppercase project-key normalization, disabled
   controls and duplicate-submit prevention while pending, clear success feedback
   including the returned issue key (clearing the title/description and keeping the
-  project key), and a distinct uncertain-outcome warning for timeout/generic
-  upstream failures advising the user to check Jira before retrying.
+  project key), and a distinct uncertain-outcome warning advising the user to
+  check Jira before retrying for every failure that can occur after the request
+  leaves the browser (timeout, unreachable, network, and any unexpected server
+  outcome), because ticket creation is not idempotent.
 - Integration into the authenticated shell: `JiraConnectionPanel` reports the
   loaded connection state to `AuthenticatedShell` through a small callback, and the
   shell renders the ticket panel only when the tenant connection has loaded as
@@ -1005,18 +1007,31 @@ internal IDs are never rendered:
 | `jira_unreachable` (502)             | **Uncertain outcome** (see below).                        |
 | `jira_timeout` (504)                 | **Uncertain outcome** (see below).                        |
 | `jira_not_configured` (503)          | Jira integration not configured on the server.            |
-| `internal_error` (500) / unexpected  | Generic "something went wrong" copy.                      |
-| Browser/server network failure       | Unable to reach the server — check your connection.       |
+| `internal_error` (500) / unexpected  | **Uncertain outcome** (see below).                        |
+| Browser/server network failure       | **Uncertain outcome** (see below).                        |
 
 ### Uncertain outcomes and the POC duplicate-creation risk
 
-Milestone 8 documents that ticket creation is **not** idempotent: on a timeout
-(`jira_timeout`) or a generic upstream failure (`jira_unreachable`) Jira may or
-may not have created the issue, and an immediate retry can create a duplicate. The
-UI surfaces this directly: for those two outcomes it shows a distinct warning that
-the ticket *may* have been created and that the user should **check Jira before
-retrying**, because retrying may create a duplicate. The frontend never retries a
-ticket creation automatically.
+Milestone 8 documents that ticket creation is **not** idempotent: once the request
+leaves the browser, any failure may have occurred *after* Jira already created the
+issue, so an immediate retry can create a duplicate. The frontend therefore treats
+every post-request failure as an **uncertain outcome**, not just upstream timeouts
+and unreachable errors:
+
+- `jira_timeout` (504) and `jira_unreachable` (502) — Jira may or may not have
+  received and acted on the request.
+- A browser/network failure where the response was never seen — the request may
+  still have reached the backend and Jira.
+- `internal_error` (500) and any unexpected/malformed server outcome — the backend
+  may have created the Jira issue and then failed while recording provenance or
+  building the response.
+
+For all of these the UI shows a distinct warning that the ticket *may* have been
+created and that the user should **check Jira before retrying**, because retrying
+may create a duplicate. Only definitive, pre-creation failures (validation,
+authentication, not-connected, inaccessible project, unsupported Task, rejected
+credentials, not-configured) are shown as certain failures safe to correct and
+resubmit. The frontend never retries a ticket creation automatically.
 
 ### How the request is kept safe
 

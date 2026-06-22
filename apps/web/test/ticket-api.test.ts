@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createTicket,
   isUncertainTicketOutcome,
+  messageForTicketError,
   TicketApiError,
   type TicketErrorKind,
 } from '../src/api/tickets';
@@ -180,12 +181,43 @@ describe('safety guarantees', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it('flags timeout and unreachable as uncertain, others as certain', () => {
+  it('flags every post-request failure as uncertain because creation is not idempotent', () => {
     expect(isUncertainTicketOutcome('timeout')).toBe(true);
     expect(isUncertainTicketOutcome('unreachable')).toBe(true);
-    expect(isUncertainTicketOutcome('not_connected')).toBe(false);
-    expect(isUncertainTicketOutcome('credentials_rejected')).toBe(false);
-    expect(isUncertainTicketOutcome('network')).toBe(false);
-    expect(isUncertainTicketOutcome('server')).toBe(false);
+    expect(isUncertainTicketOutcome('network')).toBe(true);
+    expect(isUncertainTicketOutcome('server')).toBe(true);
+  });
+
+  it('flags pre-creation and definitive failures as certain', () => {
+    const certain: TicketErrorKind[] = [
+      'invalid_request',
+      'authentication',
+      'not_connected',
+      'project_inaccessible',
+      'task_unsupported',
+      'credentials_rejected',
+      'not_configured',
+    ];
+    for (const kind of certain) {
+      expect(isUncertainTicketOutcome(kind)).toBe(false);
+    }
+  });
+
+  it('warns about a possible duplicate in every uncertain message', () => {
+    const uncertain: TicketErrorKind[] = ['timeout', 'unreachable', 'network', 'server'];
+    for (const kind of uncertain) {
+      const message = messageForTicketError(kind);
+      expect(message).toMatch(/check jira/i);
+      expect(message).toMatch(/duplicate/i);
+    }
+  });
+
+  it('treats internal_error as an uncertain outcome through its server mapping', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ error: { code: 'internal_error' } }, 500));
+
+    const error = await createTicket(input).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(TicketApiError);
+    expect(isUncertainTicketOutcome((error as TicketApiError).kind)).toBe(true);
+    expect((error as TicketApiError).message).toMatch(/duplicate/i);
   });
 });

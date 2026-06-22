@@ -29,8 +29,10 @@ export interface CreatedTicket {
  * The distinct ticket-creation failures the UI reacts to differently. Each maps to
  * safe, generic frontend copy; raw backend or Jira messages are never surfaced.
  *
- * `timeout` and `unreachable` are *uncertain* outcomes: Jira may or may not have
- * created the issue, so the UI must warn the user to check Jira before retrying.
+ * Several kinds are *uncertain* outcomes: because ticket creation is not
+ * idempotent, the failure may have happened after Jira already created the issue,
+ * so the UI must warn the user to check Jira before retrying rather than encourage
+ * a blind retry. See {@link isUncertainTicketOutcome}.
  */
 export type TicketErrorKind =
   | 'invalid_request'
@@ -60,10 +62,17 @@ const JSON_HEADERS = { 'Content-Type': 'application/json', Accept: 'application/
 
 /**
  * Whether the outcome leaves it genuinely unknown whether Jira created the issue.
- * The UI uses this to show the "check Jira before retrying" duplicate-risk warning.
+ * Because ticket creation is not idempotent, this covers every failure that can
+ * occur after the request leaves the browser: an upstream timeout or unreachable
+ * Jira, a browser/network failure where the response was never seen, and any
+ * unexpected server outcome (including a server-side persistence failure that
+ * happens *after* Jira created the issue). The UI uses this to show the
+ * "check Jira before retrying" duplicate-risk warning instead of a blind retry.
  */
 export function isUncertainTicketOutcome(kind: TicketErrorKind): boolean {
-  return kind === 'timeout' || kind === 'unreachable';
+  return (
+    kind === 'timeout' || kind === 'unreachable' || kind === 'network' || kind === 'server'
+  );
 }
 
 /** Generic, UI-safe copy for each error kind. Never includes backend text. */
@@ -88,10 +97,10 @@ export function messageForTicketError(kind: TicketErrorKind): string {
     case 'not_configured':
       return 'Jira integration is not configured on the server. Contact an administrator.';
     case 'network':
-      return 'Unable to reach the server. Check your connection and try again.';
+      return 'We could not reach the server to confirm whether the ticket was created. The ticket may already exist in Jira, so check Jira before trying again, because retrying may create a duplicate.';
     case 'server':
     default:
-      return 'Something went wrong. Please try again.';
+      return 'Something went wrong, so we could not confirm whether the ticket was created. The ticket may already exist in Jira, so check Jira before trying again, because retrying may create a duplicate.';
   }
 }
 

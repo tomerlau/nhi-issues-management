@@ -432,12 +432,21 @@ cumulatively as later milestones add functionality.
   request is made. Connection management and ticket creation stay as separate
   components; no global state, routing, or broad context abstraction is added.
 - **Uncertain outcomes surface the existing Milestone 8 duplicate-creation risk.**
-  Because ticket creation is not idempotent, a timeout (`jira_timeout`) or a
-  generic upstream failure (`jira_unreachable`) leaves it unknown whether Jira
-  created the issue. The UI shows a distinct warning to check Jira before retrying
-  because a retry may create a duplicate, and the frontend never retries a ticket
-  creation automatically. This presents the already-approved Milestone 8 POC
-  tradeoff; it is not a new decision.
+  Because ticket creation is not idempotent, *any* failure after the request
+  leaves the browser may have occurred after Jira already created the issue, so the
+  UI treats the whole class as uncertain rather than only upstream timeouts. This
+  covers the upstream `jira_timeout` and `jira_unreachable` outcomes, a
+  browser/network failure where the response was never observed, and any unexpected
+  or malformed server outcome — including a 500 `internal_error`, which by the
+  Milestone 8 design can mean Jira created the issue but the backend then failed
+  while recording provenance or building the response. For all of them the UI shows
+  a distinct warning that the ticket may already exist and that the user should
+  check Jira before retrying, because a retry may create a duplicate; the frontend
+  never retries a ticket creation automatically. Only definitive pre-creation
+  failures (validation, authentication, not-connected, inaccessible project,
+  unsupported `Task`, rejected credentials, not-configured) are treated as certain.
+  This presents the already-approved Milestone 8 POC tradeoff more conservatively;
+  it is not a new backend decision.
 - **Errors and status are safe by construction.** The UI maps backend error codes
   to safe, category-specific copy, treats an expired session distinctly from
   retryable failures, and never renders raw backend/Jira text, technical error

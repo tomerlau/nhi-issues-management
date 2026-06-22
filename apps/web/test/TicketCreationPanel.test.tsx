@@ -236,19 +236,22 @@ describe('error categories', () => {
     expect(await submitFailingWith('authentication')).toHaveTextContent(/session is no longer valid/i);
   });
 
-  it('shows network copy', async () => {
+  it('warns about a possible duplicate on a network failure', async () => {
     render(<TicketCreationPanel />);
-    expect(await submitFailingWith('network')).toHaveTextContent(/unable to reach the server/i);
+    const alert = await submitFailingWith('network');
+    expect(alert).toHaveTextContent(/check jira/i);
+    expect(alert).toHaveTextContent(/duplicate/i);
   });
 
-  it('shows generic server copy and never the raw message', async () => {
+  it('warns about a possible duplicate on a server failure and never shows the raw message', async () => {
     render(<TicketCreationPanel />);
     const alert = await submitFailingWith('server');
-    expect(alert).toHaveTextContent(/something went wrong/i);
+    expect(alert).toHaveTextContent(/check jira/i);
+    expect(alert).toHaveTextContent(/duplicate/i);
     expect(alert).not.toHaveTextContent(/ignored raw text/);
   });
 
-  it('falls back to generic server copy for an unexpected error type', async () => {
+  it('treats an unexpected error type as an uncertain server outcome', async () => {
     render(<TicketCreationPanel />);
     mockedCreate.mockRejectedValue(new Error('boom'));
 
@@ -256,7 +259,8 @@ describe('error categories', () => {
     submit();
 
     const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent(/something went wrong/i);
+    expect(alert).toHaveTextContent(/check jira/i);
+    expect(alert).toHaveTextContent(/duplicate/i);
     expect(alert).not.toHaveTextContent(/boom/);
   });
 });
