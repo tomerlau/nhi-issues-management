@@ -136,9 +136,12 @@ cumulatively as later milestones add functionality.
   requests.
 - **Secure cookies depend on the environment.** The `Secure` cookie attribute is
   enabled when `NODE_ENV=production` and disabled for local HTTP development.
-- **The frontend treats restoration failures distinctly.** An HTTP 401 is the
-  normal logged-out state, but a network or unexpected server failure during
-  session restoration is surfaced as a retryable error, not as being logged out.
+- **Session restoration is a normal HTTP 200 state.** `GET /api/auth/session`
+  returns HTTP 200 with `{ user: null }` when there is no valid session, so an
+  unauthenticated initial load is not a request failure. Genuine protected routes
+  and invalid login credentials still return HTTP 401. The frontend renders the
+  login screen from `{ user: null }` and treats a network or unexpected server
+  failure during restoration as a retryable error, not as being logged out.
 - **Deferred:** registration, password reset or change, SSO and social login,
   roles and permissions, API keys, tenant selection and administration, frontend
   routing, rate limiting, account lockout, and production/distributed session

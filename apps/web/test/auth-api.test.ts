@@ -40,8 +40,8 @@ describe('restoreSession', () => {
     expect(init?.credentials).toBe('same-origin');
   });
 
-  it('returns null for the unauthenticated 401 state', async () => {
-    fetchMock.mockResolvedValue(jsonResponse({ error: { code: 'unauthenticated' } }, 401));
+  it('returns null for the unauthenticated { user: null } state', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ user: null }));
 
     await expect(restoreSession()).resolves.toBeNull();
   });
@@ -58,8 +58,32 @@ describe('restoreSession', () => {
     await expect(restoreSession()).rejects.toMatchObject({ kind: 'server' });
   });
 
-  it('throws a server AuthError when a 200 body is not a SafeUser', async () => {
+  it('throws a server AuthError on an unexpected 401 (no longer the logged-out contract)', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ error: { code: 'unauthenticated' } }, 401));
+
+    await expect(restoreSession()).rejects.toMatchObject({ kind: 'server' });
+  });
+
+  it('throws a server AuthError when the 200 body is missing user', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({}));
+
+    await expect(restoreSession()).rejects.toMatchObject({ kind: 'server' });
+  });
+
+  it('throws a server AuthError when a 200 user is not a SafeUser', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ user: { id: 1 } }));
+
+    await expect(restoreSession()).rejects.toMatchObject({ kind: 'server' });
+  });
+
+  it('throws a server AuthError when a 200 body is an unexpected primitive', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(42));
+
+    await expect(restoreSession()).rejects.toMatchObject({ kind: 'server' });
+  });
+
+  it('throws a server AuthError on a non-JSON 200 body', async () => {
+    fetchMock.mockResolvedValue(new Response('not json', { status: 200 }));
 
     await expect(restoreSession()).rejects.toMatchObject({ kind: 'server' });
   });

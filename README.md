@@ -14,16 +14,17 @@ Implemented:
 
 - A focused frontend authentication API module (`apps/web/src/api/auth.ts`) that
   calls the three existing `/api/auth/*` endpoints over relative URLs, parses the
-  structured backend error envelope safely, and distinguishes unauthenticated
-  session restoration, invalid credentials, invalid input, network failure, and
-  unexpected server failure. It relies exclusively on the HttpOnly session cookie
-  and never reads, stores, or returns tokens.
+  structured backend error envelope safely, and distinguishes the normal
+  unauthenticated session-restoration result (`user: null`) from invalid
+  credentials, invalid input, network failure, and unexpected server failure. It
+  relies exclusively on the HttpOnly session cookie and never reads, stores, or
+  returns tokens.
 - An explicit frontend authentication state model in `apps/web/src/App.tsx`
   (`restoring` → `authenticated` / `unauthenticated` / `restore_error`). On load
   the app calls `GET /api/auth/session`, shows a loading state, then renders the
-  authenticated shell (HTTP 200) or the login screen (HTTP 401). A network or
-  unexpected server failure during restoration is shown as a retryable error and
-  is **not** treated as logged out.
+  authenticated shell (HTTP 200 with a user) or the login screen (HTTP 200 with
+  `user: null`). A network or unexpected server failure during restoration is
+  shown as a retryable error and is **not** treated as logged out.
 - A login screen (`apps/web/src/components/LoginForm.tsx`) with email and
   password inputs (`type="password"`), required-field validation, accessible
   labels and announced errors, disabled submission while pending (no duplicate
@@ -167,11 +168,11 @@ Authentication is backend-only and cookie-based. Login accepts only an email and
 password; the backend derives the user and tenant from the stored user record,
 and clients never provide or override `userId` or `tenantId` after login.
 
-| Method & path           | Auth required | Purpose                                            |
-| ----------------------- | ------------- | -------------------------------------------------- |
-| `POST /api/auth/login`  | no            | Verify credentials, create a session, set cookie.  |
-| `GET /api/auth/session` | yes (cookie)  | Return the authenticated user.                     |
-| `POST /api/auth/logout` | no            | Revoke the current session and clear the cookie.   |
+| Method & path           | Auth required | Purpose                                                  |
+| ----------------------- | ------------- | -------------------------------------------------------- |
+| `POST /api/auth/login`  | no            | Verify credentials, create a session, set cookie.        |
+| `GET /api/auth/session` | no            | Return the authenticated user, or `user: null` if none.  |
+| `POST /api/auth/logout` | no            | Revoke the current session and clear the cookie.         |
 
 All three responses include `Cache-Control: no-store`.
 
@@ -198,9 +199,13 @@ whether an email exists:
 Missing or malformed input (non-string fields, empty values, or values over the
 length limits) returns a structured HTTP 400 with code `invalid_request`.
 
-**Session** — `GET /api/auth/session` returns the same safe user shape on success
-and an HTTP 401 with code `unauthenticated` when the cookie is missing, invalid,
-expired, or revoked.
+**Session** — `GET /api/auth/session` always returns HTTP 200. It returns
+`{ "user": <safe user> }` when the session cookie is valid, and `{ "user": null }`
+when the cookie is missing, invalid, expired, or revoked. Restoring an
+unauthenticated session is a normal application state, not a request failure, so
+it deliberately does **not** return 401 (which would surface as a console error
+on initial load). Genuine protected routes still return HTTP 401 when
+unauthenticated, and invalid login credentials still return HTTP 401.
 
 **Logout** — `POST /api/auth/logout` deletes the current session (if any), clears
 the cookie, and is idempotent. It never affects other concurrent sessions.
@@ -224,8 +229,9 @@ dev proxy. It holds no tokens of its own — the browser sends the HttpOnly
 JavaScript.
 
 1. On load the app calls `GET /api/auth/session` and shows a brief loading state.
-   - HTTP 200 → the authenticated shell (display name, email, sign-out).
-   - HTTP 401 → the login screen.
+   - HTTP 200 with a user → the authenticated shell (display name, email, sign-out).
+   - HTTP 200 with `user: null` → the login screen (no console error, because this
+     normal unauthenticated state is not a failed request).
    - A network or unexpected server error → a retryable "couldn't verify your
      session" message, **not** the login screen.
 2. Signing in posts the email and password to `POST /api/auth/login`. Invalid
@@ -274,7 +280,7 @@ curl -i -b alice.cookies http://localhost:3001/api/auth/session
 # Log out (revokes only this session and clears the cookie).
 curl -i -b alice.cookies -c alice.cookies -X POST http://localhost:3001/api/auth/logout
 
-# The session is rejected afterwards (HTTP 401).
+# Afterwards the session is gone (HTTP 200 with {"user":null}).
 curl -i -b alice.cookies http://localhost:3001/api/auth/session
 ```
 

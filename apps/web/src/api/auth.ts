@@ -98,10 +98,13 @@ function isSafeUser(value: unknown): value is SafeUser {
 /**
  * Restore the current session on application load.
  *
- * Resolves to the authenticated user (HTTP 200), or `null` for the normal
- * unauthenticated state (HTTP 401 `unauthenticated`). A network failure or any
- * unexpected server response rejects with an {@link AuthError}, so the caller can
- * tell "logged out" apart from "could not check".
+ * Session restoration is a normal application state, so the backend always
+ * answers HTTP 200 with a `{ user }` envelope: a {@link SafeUser} when
+ * authenticated, or `null` when there is no valid session. This function returns
+ * that value directly. A network failure, a malformed success body, or any
+ * non-200 response (including an unexpected 401) rejects with an
+ * {@link AuthError} so the caller can tell "logged out" apart from "could not
+ * check".
  */
 export async function restoreSession(signal?: AbortSignal): Promise<SafeUser | null> {
   let response: Response;
@@ -119,11 +122,24 @@ export async function restoreSession(signal?: AbortSignal): Promise<SafeUser | n
     throw new AuthError('network', 'Unable to reach the server.');
   }
 
-  if (response.ok) {
-    return readUser(response);
+  if (!response.ok) {
+    throw new AuthError('server', 'The server returned an unexpected response.');
   }
-  if (response.status === 401) {
-    return null;
+
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    throw new AuthError('server', 'The server returned an unexpected response.');
+  }
+  if (typeof body === 'object' && body !== null && 'user' in body) {
+    const user = (body as { user: unknown }).user;
+    if (user === null) {
+      return null;
+    }
+    if (isSafeUser(user)) {
+      return user;
+    }
   }
   throw new AuthError('server', 'The server returned an unexpected response.');
 }

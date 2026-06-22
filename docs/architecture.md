@@ -56,30 +56,37 @@ endpoint, plus a `SafeUser` type and a typed `AuthError`. It reads the structure
 `{ error: { code } }` envelope defensively (never trusting its shape) and the
 `{ user }` success envelope through a `SafeUser` type guard, so a malformed
 response becomes a `server` error rather than a bad render. The normal logged-out
-state is not an error: `restoreSession` returns `null` for an HTTP 401. Actual
-API failures are raised as a typed `AuthError` whose kind is one of
-`invalid_credentials`, `invalid_request`, `network`, or `server`, and the
-backend's error *message* is deliberately discarded so raw server text never
-reaches the user. `restoreSession` accepts an `AbortSignal` and re-throws
-`AbortError` unwrapped so an unmounted initial load does not flip state.
+state is not an error: session restoration always answers HTTP 200 with a
+`{ user }` envelope, and `restoreSession` returns the `SafeUser` when present or
+`null` when `user` is `null`. A missing `user`, an invalid user object, an
+unexpected primitive body, invalid JSON, or any non-200 status (including an
+unexpected 401) all become a `server` failure. Actual API failures are raised as
+a typed `AuthError` whose kind is one of `invalid_credentials`,
+`invalid_request`, `network`, or `server`, and the backend's error *message* is
+deliberately discarded so raw server text never reaches the user. `restoreSession`
+accepts an `AbortSignal` and re-throws `AbortError` unwrapped so an unmounted
+initial load does not flip state.
 
 ### Authentication state flow
 
 `src/App.tsx` holds one explicit state value:
 
 ```
-restoring ── GET /api/auth/session ──┬─ 200 ──> authenticated(user)
-                                     ├─ 401 ──> unauthenticated
-                                     └─ network/server ──> restore_error (retryable)
+restoring ── GET /api/auth/session ──┬─ 200 { user }      ──> authenticated(user)
+                                     ├─ 200 { user: null } ──> unauthenticated
+                                     └─ network/server     ──> restore_error (retryable)
 ```
 
 On mount the app calls `GET /api/auth/session` while showing a loading state.
-HTTP 200 renders the authenticated shell; HTTP 401 renders the login screen. A
-network or unexpected server failure is a **distinct** `restore_error` state with
-a retry action — it is never collapsed into "logged out", because that would let
-a transient outage masquerade as a sign-out. Because restoration re-runs on every
-load, a refresh restores a valid session automatically and leaves a logged-out
-browser on the login screen.
+HTTP 200 with a user renders the authenticated shell; HTTP 200 with `user: null`
+renders the login screen. Because being unauthenticated is a normal state rather
+than a failed request, the endpoint never answers 401 here, so an initial
+unauthenticated load produces no console error. A network or unexpected server
+failure — including an unexpected non-200 response — is a **distinct**
+`restore_error` state with a retry action; it is never collapsed into "logged
+out", because that would let a transient outage masquerade as a sign-out. Because
+restoration re-runs on every load, a refresh restores a valid session
+automatically and leaves a logged-out browser on the login screen.
 
 ### Login and logout HTTP flow
 
@@ -227,11 +234,20 @@ return the same generic 401, so a client cannot probe which emails exist.
 On success the server generates an opaque session token — 32 random bytes (256
 bits) as URL-safe base64 — records a session row, and returns the token only in
 the session cookie. A session row stores the token's SHA-256 hash, the owning
-tenant and user, and an absolute eight-hour expiry. Session resolution
-(`GET /api/auth/session` and the `requireAuth` middleware) reads the cookie,
-hashes the token, looks up a non-expired session by that hash, and loads the user
-within the session's own `(tenantId, userId)` scope. Logout deletes only the row
-matching the current token hash, leaving every other session intact.
+tenant and user, and an absolute eight-hour expiry. Session resolution reads the
+cookie, hashes the token, looks up a non-expired session by that hash, and loads
+the user within the session's own `(tenantId, userId)` scope. Logout deletes only
+the row matching the current token hash, leaving every other session intact.
+
+Session restoration and protected routes treat a resolved session differently.
+`GET /api/auth/session` is **not** a protected route: it always returns HTTP 200,
+with `{ user: SafeUser }` for a valid session and `{ user: null }` for a missing,
+invalid, expired, or revoked one, because being unauthenticated on initial load
+is a normal application state rather than a request failure. The reusable
+`requireAuth` middleware, which guards genuine protected routes, still rejects an
+unauthenticated request with a generic HTTP 401 and is unchanged. Invalid login
+credentials likewise still return HTTP 401, and all authentication responses
+remain `Cache-Control: no-store`.
 
 ### Authentication: trust boundary
 
