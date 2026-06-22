@@ -1,7 +1,7 @@
 # Project Assumptions
 
 This document records the assumptions and tradeoffs relevant to the
-functionality implemented through the current milestone (Milestone 3). It grows
+functionality implemented through the current milestone (Milestone 5). It grows
 cumulatively as later milestones add functionality.
 
 ## Scope
@@ -11,6 +11,7 @@ cumulatively as later milestones add functionality.
 - Milestone 1 established the project foundation.
 - Milestone 2 adds persistence, the tenant/user data model, and tenant isolation.
 - Milestone 3 adds backend-only application authentication.
+- Milestone 5 adds a backend-only Jira API-token connection.
 - The optional blog digest is not part of the current implementation.
 
 ## Frontend
@@ -130,3 +131,41 @@ cumulatively as later milestones add functionality.
 - **Deferred:** registration, password reset or change, SSO and social login,
   roles and permissions, API keys, tenant administration, rate limiting, account
   lockout, and production/distributed session infrastructure.
+
+## Jira connection (Milestone 5)
+
+- **POC assumption:** users create and submit an Atlassian API token through the
+  application. The token is encrypted in the local SQLite database with an
+  environment-provided application key (`JIRA_CREDENTIAL_ENCRYPTION_KEY`,
+  base64, decoding to exactly 32 bytes) using AES-256-GCM.
+  - **Production alternative:** Atlassian OAuth 2.0 Authorization Code Flow
+    (3LO), with a managed key service such as AWS KMS providing envelope
+    encryption and key rotation.
+  - **Tradeoff:** API-token authentication significantly reduces setup and
+    implementation complexity for the home-assignment POC, but requires the
+    application to receive and retain a manually provisioned, long-lived
+    credential.
+- **The exercise reviewer confirmed either approach (API token or OAuth 2.0 3LO)
+  is acceptable;** the simpler API-token connection was the chosen source of
+  truth for this milestone.
+- **Jira Cloud only.** Only direct `https://<site>.atlassian.net` URLs are
+  supported; the URL is validated and normalized to its HTTPS origin before any
+  network call (SSRF boundary).
+- **One connection per application user,** owned by the `(tenantId, userId)`
+  pair and reachable only within that scope.
+- **Credentials are validated before persistence.** The token is verified
+  against `GET /rest/api/3/myself` and only stored on success; a failed
+  validation or reconnection never overwrites an existing valid connection.
+- **API tokens are never returned to the frontend** and never logged. Only safe
+  connection status (connected flag, site URL, email) is exposed.
+- **Tokens may expire or be revoked.** When that happens the connection becomes
+  invalid and the user must reconnect; there is no automatic refresh (API tokens
+  are not refreshable).
+- **The encryption key is required only for Jira connection operations.** When it
+  is missing, the Jira endpoints return HTTP 503 `jira_not_configured` while
+  health, login, logout, and session restoration continue to work. No fallback
+  or development key is ever generated.
+- **Deferred:** any frontend or Jira connection UI; OAuth 2.0 / 3LO and token
+  refresh; a reusable Jira API client (Milestone 7); Jira project discovery or
+  validation; ticket creation; a disconnect endpoint; and production KMS
+  integration or key rotation.

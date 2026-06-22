@@ -45,7 +45,11 @@ describe('migration runner', () => {
   it('records applied migrations and is idempotent on re-run', () => {
     const db = openDatabase(':memory:');
     const firstRun = runMigrations(db);
-    expect(firstRun).toEqual(['001_initial_schema.sql', '002_authentication.sql']);
+    expect(firstRun).toEqual([
+      '001_initial_schema.sql',
+      '002_authentication.sql',
+      '003_jira_connections.sql',
+    ]);
 
     const secondRun = runMigrations(db);
     expect(secondRun).toEqual([]);
@@ -53,7 +57,11 @@ describe('migration runner', () => {
     const recorded = (
       db.prepare('SELECT id FROM schema_migrations ORDER BY id').all() as { id: string }[]
     ).map((row) => row.id);
-    expect(recorded).toEqual(['001_initial_schema.sql', '002_authentication.sql']);
+    expect(recorded).toEqual([
+      '001_initial_schema.sql',
+      '002_authentication.sql',
+      '003_jira_connections.sql',
+    ]);
     db.close();
   });
 });
