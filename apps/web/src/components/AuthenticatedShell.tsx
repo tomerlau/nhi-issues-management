@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { AuthError, logout, type SafeUser } from '../api/auth';
 import JiraConnectionPanel from './JiraConnectionPanel';
+import TicketCreationPanel from './TicketCreationPanel';
 
 interface AuthenticatedShellProps {
   user: SafeUser;
@@ -22,6 +23,13 @@ function logoutMessage(error: unknown): string {
 export default function AuthenticatedShell({ user, onLoggedOut }: AuthenticatedShellProps) {
   const [loggingOut, setLoggingOut] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [jiraConnected, setJiraConnected] = useState(false);
+
+  // Stable so the connection panel's reporting effect does not re-fire on every
+  // shell render.
+  const handleConnectionChange = useCallback((connected: boolean) => {
+    setJiraConnected(connected);
+  }, []);
 
   const handleLogout = () => {
     if (loggingOut) {
@@ -63,7 +71,8 @@ export default function AuthenticatedShell({ user, onLoggedOut }: AuthenticatedS
             {error}
           </p>
         )}
-        <JiraConnectionPanel />
+        <JiraConnectionPanel onConnectionChange={handleConnectionChange} />
+        {jiraConnected && <TicketCreationPanel />}
       </main>
     </div>
   );
