@@ -1,7 +1,7 @@
 # Architecture
 
 This document describes the architecture that currently exists through
-Milestone 3. It intentionally avoids designing later domain layers in detail.
+Milestone 4. It intentionally avoids designing later domain layers in detail.
 
 ## Monorepo structure
 
@@ -26,16 +26,84 @@ the relative endpoint `/api/health`.
 ## Local request flow
 
 ```
-Browser
+Browser (React app, 5173)
   -> Vite development server (5173)
   -> /api proxy
-  -> Express GET /api/health (3001)
-  -> { "status": "ok" }
+  -> Express /api/auth/* and /api/health (3001)
+  -> JSON response (+ Set-Cookie: nhi_session on login)
 ```
 
 In development the Vite dev server proxies any `/api/*` request to the backend.
 This keeps the browser on a single origin and removes any need for permissive
-CORS on the backend.
+CORS on the backend. Because requests stay same-origin, the browser attaches the
+`HttpOnly` `nhi_session` cookie automatically; the frontend never reads or sets
+it.
+
+## Frontend authentication
+
+The frontend (`apps/web`) is the user-facing authentication experience built on
+the backend endpoints. It keeps the same separation as the rest of the app: it
+holds no secrets, talks to the backend only over relative `/api` requests, and
+derives the authenticated user solely from the backend session response.
+
+### Authentication API module
+
+`src/api/auth.ts` is a small, explicit module — not a generic API client. It
+exposes `restoreSession`, `login`, and `logout`, each calling exactly one
+endpoint, plus a `SafeUser` type and a typed `AuthError`. It reads the structured
+`{ error: { code } }` envelope defensively (never trusting its shape) and the
+`{ user }` success envelope through a `SafeUser` type guard, so a malformed
+response becomes a `server` error rather than a bad render. Failures are mapped to
+distinct kinds — `unauthenticated`, `invalid_credentials`, `invalid_request`,
+`network`, `server` — and the backend's error *message* is deliberately discarded
+so raw server text never reaches the user. `restoreSession` accepts an
+`AbortSignal` and re-throws `AbortError` unwrapped so an unmounted initial load
+does not flip state.
+
+### Authentication state flow
+
+`src/App.tsx` holds one explicit state value:
+
+```
+restoring ── GET /api/auth/session ──┬─ 200 ──> authenticated(user)
+                                     ├─ 401 ──> unauthenticated
+                                     └─ network/server ──> restore_error (retryable)
+```
+
+On mount the app calls `GET /api/auth/session` while showing a loading state.
+HTTP 200 renders the authenticated shell; HTTP 401 renders the login screen. A
+network or unexpected server failure is a **distinct** `restore_error` state with
+a retry action — it is never collapsed into "logged out", because that would let
+a transient outage masquerade as a sign-out. Because restoration re-runs on every
+load, a refresh restores a valid session automatically and leaves a logged-out
+browser on the login screen.
+
+### Login and logout HTTP flow
+
+The login form owns its own email/password fields and submits to
+`POST /api/auth/login`. On success the backend sets the cookie and returns the
+safe user, which becomes the authenticated state; the password field is cleared
+after every completed attempt and the submit button is disabled while a request
+is in flight, preventing duplicate submissions. Invalid credentials surface a
+single generic message, mirroring the backend's deliberate refusal to reveal
+whether an email exists.
+
+Logout posts to `POST /api/auth/logout`. On success the app returns to the login
+screen. On a network or server failure it keeps the authenticated state and shows
+a retryable error rather than pretending the session was revoked — the cookie and
+server-side session may still be live, so the UI must not claim otherwise.
+
+### Why no token or credential is stored on the client
+
+The browser holds the session only as the `HttpOnly` `nhi_session` cookie, which
+JavaScript cannot read. The frontend therefore never stores a session token,
+authorization header, or password in React state (beyond the password field while
+a login submits), `localStorage`, `sessionStorage`, the URL, or logs. The
+authenticated principal comes only from the backend session response, and there
+is no UI to assert or override a user or tenant id — keeping the M3 trust boundary
+intact from the browser down. This is the frontend analogue of storing only token
+hashes server-side: the value that authenticates a request never lives anywhere a
+script or a leaked log could replay it.
 
 ## Backend application / startup separation
 
