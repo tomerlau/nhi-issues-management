@@ -10,7 +10,8 @@ explains that the connection is shared by everyone in the tenant, displays only
 the safe site URL and Atlassian email, and lets any tenant user replace the
 shared connection. The Atlassian API token is entered through an uncontrolled
 secret input, exists only transiently during submission, is cleared immediately
-once captured, and is never stored in React state or any browser storage.
+when an actual POST request begins, and is never stored in React state or any
+browser storage.
 
 Earlier milestones added backend-only application authentication (globally
 unique user emails, Argon2id-hashed passwords, persistent server-side sessions,
@@ -47,10 +48,12 @@ Implemented:
   metadata, encrypted data, and credential material are never displayed.
 - Strict API-token secret handling in the form: the token input is `type="password"`,
   uncontrolled, and read only via a DOM ref at submit time. The captured token is
-  cleared from the input immediately when submission starts (before the HTTP
-  response), is never placed in React state, props, context, or any browser
+  cleared from the input immediately when an actual POST request begins (before the
+  HTTP response), is never placed in React state, props, context, or any browser
   storage, and is never retained for a retry — a second attempt requires
-  re-entering the token. `siteUrl` and `email` use ordinary React state.
+  re-entering the token. If client-side validation fails before a request is made,
+  the uncontrolled input retains its value so the user can correct the other
+  fields. `siteUrl` and `email` use ordinary React state.
 - Submission behavior: duplicate submissions are prevented and controls are
   disabled while a save is in flight, with clear loading text. Empty fields are
   rejected client-side before any request (the backend remains the authoritative
@@ -585,23 +588,26 @@ The Atlassian API token is treated as a secret in the form:
 
 - The token input is `type="password"` and **uncontrolled** — it is never bound
   to React state.
-- The token is read only at submission time via a DOM ref, and the input is
-  **cleared immediately once captured**, before the HTTP response resolves.
+- The token is read only at submission time via a DOM ref. The input is **cleared
+  immediately when an actual POST request begins**, before the HTTP response
+  resolves. If client-side required-field validation fails before a request is
+  made, the uncontrolled input retains its value so the user can correct the
+  other fields.
 - The token exists only transiently in the local submit call and the outgoing
   request body. It is never stored in React state, context, props, a store, or
   any browser storage (`localStorage`, `sessionStorage`, IndexedDB, cookies),
   and is never placed in URLs, logs, errors, analytics, or rendered output.
 - The token is never retained for a retry, and a request carrying a token is
-  never retried automatically: a second attempt requires re-entering the token.
+  never retried automatically: a completed POST attempt (successful or failed)
+  requires re-entering the token.
 - `siteUrl` and `email` use ordinary local React state.
 
 It is expected that the submitted token is present transiently in the outgoing
 request body, which is visible to the user who owns the browser session; the
-application does not and cannot hide it from that user. Local development sends
-this request over plain HTTP on the loopback interface (the Vite dev server and
-the API both run on `localhost`), so the local request is **not** encrypted. Any
-non-local or production deployment must terminate the connection over HTTPS/TLS so
-the token is not exposed in transit.
+application does not and cannot hide it from that user. Local development accesses
+the frontend and API through `localhost` over plain HTTP, so the local request is
+**not** protected by TLS. Any non-local or production deployment must use
+HTTPS/TLS so the token is not exposed in transit.
 
 ### Manual validation: Jira connection UI (Milestone 6)
 
@@ -639,8 +645,9 @@ a real Jira Cloud site, account email, and **unscoped** API token.
    from application logs, the database token field, generated files, and
    `git status`. It is expected that the submitted token appears transiently in
    the outgoing request body visible to the browser's own user. Note that local
-   development uses plain HTTP on the loopback interface, so this local request
-   is not encrypted; a production deployment must use HTTPS/TLS.
+   development accesses the frontend and API through `localhost` over plain HTTP,
+   so the local request is not protected by TLS; any non-local or production
+   deployment must use HTTPS/TLS.
 7. **Regression.** Confirm session restoration on refresh, login, logout success,
    and logout-failure behavior (stop the API, sign out → retryable error, stays
    signed in) all continue to work with the panel mounted.

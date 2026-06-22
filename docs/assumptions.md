@@ -31,7 +31,9 @@ cumulatively as later milestones add functionality.
   select or override a user or tenant id.
 - The Jira connection UI (Milestone 6) follows the same boundary. The Atlassian
   API token is entered through an uncontrolled secret input, read only via a DOM
-  ref at submit time, cleared from the input immediately once captured, and never
+  ref at submit time, cleared from the input immediately when an actual POST
+  request begins (a client-side validation failure before a request retains the
+  input value so the user can correct the other fields), and never
   placed in React state or any browser storage (`localStorage`, `sessionStorage`,
   IndexedDB, cookies, URLs, or logs). It exists only transiently in the submit
   call and the outgoing request body, is never retained for a retry, and is never
@@ -243,16 +245,18 @@ cumulatively as later milestones add functionality.
     tenant scope.
 - **The token is a transient browser secret.** It is entered through an
   uncontrolled `type="password"` input, read only via a DOM ref at submit time,
-  cleared immediately once an actual POST submission begins, never stored in
-  React state or any browser storage, and never retained for a retry. It is
+  cleared immediately when an actual POST request begins, never stored in
+  React state or any browser storage, and never retained for a retry. If
+  client-side validation fails before a request is made, the uncontrolled input
+  retains its value so the user can correct the other fields. It is
   expected to appear transiently only in the outgoing request body, which is
   visible to the browser's own user.
-  - **Transport (POC assumption):** local development runs the Vite dev server
-    and the API over plain HTTP on the loopback interface, so the local request
-    is **not** encrypted.
-  - **Production alternative:** any non-local or production deployment must
-    terminate traffic over HTTPS/TLS so the token is protected in transit.
-  - **Tradeoff:** plain-HTTP loopback keeps local setup friction low; the
+  - **Transport (POC assumption):** local development accesses the frontend and
+    API through `localhost` over plain HTTP, so the local request is **not**
+    protected by TLS.
+  - **Production alternative:** any non-local or production deployment must use
+    HTTPS/TLS so the token is not exposed in transit.
+  - **Tradeoff:** plain-HTTP local access keeps setup friction low; the
     not-stored-in-the-browser guarantees hold regardless of transport, but
     transport encryption is a deployment responsibility, not a client-state one.
 - **Errors and status are safe by construction.** The UI maps backend error

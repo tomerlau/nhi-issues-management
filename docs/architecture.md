@@ -165,11 +165,14 @@ credential material.
 
 The token is the one field deliberately kept out of React state. `siteUrl` and
 `email` are ordinary controlled inputs, but the token input is **uncontrolled**
-and read only through a DOM ref at submit time. Once captured, the handler clears
-the input's value immediately — before the network request resolves — so the
+and read only through a DOM ref at submit time. The token is cleared immediately
+when an actual POST request begins — before the network request resolves — so the
 secret never persists in the input, is never retained for a retry, and is never
-placed in state, context, props, a store, or any browser storage. The token
-exists only as a transient local variable and in the outgoing request body. This
+placed in state, context, props, a store, or any browser storage. If client-side
+validation fails before a request is made, the uncontrolled input retains its
+value so the user can correct the other fields without re-typing the token. The
+token exists only as a transient local variable and in the outgoing request body.
+This
 is the frontend analogue of the backend's write-only credential handling: the
 value that authenticates to Jira never lives anywhere a re-render, a retry, or a
 leaked store could replay it. A failed save preserves the previously loaded
@@ -178,12 +181,12 @@ matching the backend guarantee that a failed replacement never disturbs the
 stored connection.
 
 The token therefore lives only transiently in the outgoing request body; the
-client makes no claim about transport encryption. Local development runs both the
-Vite dev server and the API over plain HTTP on the loopback interface, so the
-local request is not encrypted. Any non-local or production deployment must
-terminate traffic over HTTPS/TLS so the token is protected in transit. This is a
-deployment concern, not a client-state concern: the not-stored-in-the-browser
-guarantees above hold regardless of transport.
+client makes no claim about transport encryption. Local development accesses the
+frontend and API through `localhost` over plain HTTP, so the local request is not
+protected by TLS. Any non-local or production deployment must use HTTPS/TLS so the
+token is not exposed in transit. This is a deployment concern, not a client-state
+concern: the not-stored-in-the-browser guarantees above hold regardless of
+transport.
 
 ## Backend application / startup separation
 
