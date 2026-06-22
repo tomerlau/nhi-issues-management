@@ -18,14 +18,6 @@ type LoadState =
   | { status: 'error' }
   | { status: 'ready'; connection: JiraConnectionStatus };
 
-/** Generic, UI-safe copy for a failed status load. */
-function loadErrorMessage(error: unknown): string {
-  if (error instanceof JiraApiError) {
-    return messageForKind(error.kind);
-  }
-  return messageForKind('server');
-}
-
 /**
  * Tenant-wide Jira connection panel. It shows the shared connection status and
  * lets any authenticated tenant user create or replace the single connection.

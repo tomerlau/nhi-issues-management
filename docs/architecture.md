@@ -119,6 +119,56 @@ intact from the browser down. This is the frontend analogue of storing only toke
 hashes server-side: the value that authenticates a request never lives anywhere a
 script or a leaked log could replay it.
 
+## Frontend Jira connection (Milestone 6)
+
+Milestone 6 adds the user-facing view of the tenant-wide Jira connection. It is
+frontend only and consumes the unchanged Milestone 5 backend contract
+(`GET`/`POST /api/jira/connection`); no backend behavior changed.
+
+### Jira API module
+
+`src/api/jira.ts` mirrors the `auth.ts` style: a small, explicit module — not a
+generic client. It exposes `getJiraConnection`, `saveJiraConnection`, a
+`JiraConnectionStatus` type, a typed `JiraApiError`, and a `messageForKind`
+helper that maps each error kind to safe, generic copy. It reads the structured
+`{ error: { code } }` envelope defensively and maps recognized backend codes
+(`invalid_request`, `jira_credentials_rejected`, `jira_not_configured`,
+`jira_timeout`, `jira_unreachable`, `unauthenticated`) plus transport and
+unexpected-status outcomes to distinct kinds (`invalid_request`,
+`credentials_rejected`, `not_configured`, `timeout`, `unreachable`,
+`authentication`, `network`, `server`). Success bodies are parsed through a
+status parser that reads **only** the safe `connected`/`siteUrl`/`email` fields,
+so an unexpected credential-shaped field in a response is structurally ignored
+rather than surfaced, and a malformed body becomes a `server` error. The backend
+*message* is always discarded so raw server or Jira text never reaches the user,
+and the module logs nothing.
+
+### Jira connection panel
+
+`src/components/JiraConnectionPanel.tsx` is mounted inside the authenticated
+shell. It owns a small load state (`loading` → `ready` / `error`) plus the safe
+connection status, and renders the disconnected form, the connected summary
+(safe site URL and email only), the shared-tenant explanation, the create/replace
+flow, and a retryable load-error state. It derives the displayed status solely
+from the backend response; it never renders internal user/tenant/connection IDs,
+account IDs, audit metadata, encrypted data, or credential material.
+
+### Why the API token is never held in client state
+
+The token is the one field deliberately kept out of React state. `siteUrl` and
+`email` are ordinary controlled inputs, but the token input is **uncontrolled**
+and read only through a DOM ref at submit time. Once captured, the handler clears
+the input's value immediately — before the network request resolves — so the
+secret never persists in the input, is never retained for a retry, and is never
+placed in state, context, props, a store, or any browser storage. The token
+exists only as a transient local variable and in the outgoing request body. This
+is the frontend analogue of the backend's write-only credential handling: the
+value that authenticates to Jira never lives anywhere a re-render, a retry, or a
+leaked store could replay it. A failed save preserves the previously loaded
+connection unchanged and forces the token to be re-entered for another attempt,
+matching the backend guarantee that a failed replacement never disturbs the
+stored connection.
+
 ## Backend application / startup separation
 
 The backend separates application construction from process startup:
