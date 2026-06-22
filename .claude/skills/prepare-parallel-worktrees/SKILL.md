@@ -13,65 +13,91 @@ separate Claude Code session is started inside each worktree and runs the
 This skill only prepares worktrees. It never implements milestone
 functionality, never installs dependencies, and never decides milestone scope.
 
+On a protected branch the Bash guard allows only safe Git inspection and the
+exact preparation commands listed below; any other shell command is blocked.
+Use Claude's own file tools (Read/Glob), not Bash, for filesystem inspection.
+
 ## Inputs
 
 Exactly **two** approved milestone specifications, each with:
 
-- milestone number
+- milestone number (a positive integer)
 - short kebab-case slug
 - target worktree path (outside the primary checkout's working tree)
 
 The branch name for each is built as `milestone/<number>-<slug>`.
 
-Reject the request before doing anything if:
+`validateWorktreeRequest` in `.claude/hooks/worktree-decision.mjs` is the source
+of truth for request validation. STOP and report before doing anything if it
+rejects the request, including when:
 
 - fewer or more than two specifications are given,
-- two specifications share the same milestone number,
-- two specifications produce the same branch name,
-- two paths are identical, or
-- any slug is not short kebab-case.
-
-`validateWorktreeRequest` in `.claude/hooks/worktree-decision.mjs` is the source
-of truth for this validation.
+- a milestone number is not a positive integer,
+- a slug is not short kebab-case,
+- two specifications share the same milestone number or branch name,
+- the two paths resolve to equivalent normalized absolute paths (e.g. `../x`
+  and `../a/../x`, or case-equivalent paths on Windows),
+- one path is nested inside the other, or
+- a path equals or is nested inside the primary checkout directory.
 
 ## Steps
 
-1. Confirm this is the primary checkout and the working tree is clean:
+1. **Confirm this is the primary checkout** — not merely a checkout named
+   `main`. Compare the Git directories:
+   - `git rev-parse --absolute-git-dir`
+   - `git rev-parse --path-format=absolute --git-common-dir`
+   - They must be **equal** (primary checkout). If they differ, this is a linked
+     worktree → STOP. If either cannot be determined, STOP.
+2. Confirm the primary checkout is clean and on `main`:
    - `git status --porcelain` must be empty. If not, STOP and report. Never
      stash, reset, clean, or discard changes.
    - `git branch --show-current` must be `main`. If not, STOP and report.
-2. Update main:
+3. **Enforce the two-worktree limit.** Inspect `git worktree list --porcelain`.
+   It must contain only the primary checkout — no linked implementation
+   worktree may already exist. If a linked worktree is already registered, STOP
+   and report; the developer owns removing it. Never remove, prune, repair, or
+   reuse an existing worktree.
+4. Update main:
    - `git fetch origin`
    - `git pull --ff-only origin main` (if this fails, STOP — do not force or
      rebase)
-3. Verify the update: `git rev-parse main` must equal `git rev-parse origin/main`.
-4. Capture the exact base commit SHA once and reuse it for both worktrees:
-   - `BASE_SHA="$(git rev-parse HEAD)"`
-5. For each of the two branches, confirm it does not already exist:
+5. Verify the update: `git rev-parse main` must equal `git rev-parse origin/main`.
+6. Capture the exact base commit SHA once and reuse it for both worktrees. Run
+   `git rev-parse HEAD`, read the printed SHA, and substitute that literal value
+   into the `git worktree add` commands below. Do not use shell command
+   substitution (`$(...)`) or shell variables — each Bash call is a fresh shell,
+   and the Bash guard blocks command substitution on a protected branch.
+7. For each of the two branches, confirm it does not already exist:
    - `git branch --list "<branch>"` (local)
    - `git ls-remote --heads origin "<branch>"` (remote)
    - If either exists, STOP and report. Never overwrite, reset, delete, or reuse.
-6. For each target path, confirm it does not already exist on disk. If a path
-   exists, STOP and report.
-7. Create the worktrees **sequentially** (never concurrently), both from the
-   captured `BASE_SHA`:
+8. For each target path, confirm it does not already exist on disk (use the
+   Read/Glob tools, not Bash). If a path exists, STOP and report.
+   - `evaluateWorktreePreparation` in `.claude/hooks/worktree-decision.mjs`
+     captures the combined path/branch/worktree-limit preconditions.
+9. Create the worktrees **sequentially** (never concurrently), both from the
+   captured `BASE_SHA`, using exactly this form:
    - `git worktree add -b "<branch-1>" "<path-1>" "<BASE_SHA>"`
    - then `git worktree add -b "<branch-2>" "<path-2>" "<BASE_SHA>"`
-8. If the first worktree succeeds and the second fails, STOP and report the
-   partial state. Do **not** delete the branch, remove the worktree, reset,
-   clean, stash, or roll back. The developer owns cleanup.
+   - Do not add other flags, omit `-b`, or perform more than one operation in a
+     single command; the Bash guard rejects those variants.
+10. If the first worktree succeeds and the second fails, STOP and report the
+    partial state. Do **not** delete the branch, remove the worktree, reset,
+    clean, stash, or roll back. The developer owns cleanup.
 
 ## Verify after creation
 
-For each created worktree:
+Read `git worktree list --porcelain` once and verify from its parsed output
+(do not use `git -C`, which is not a permitted command):
 
-- it appears in `git worktree list --porcelain` (registered worktree),
-- it is on its expected `milestone/<number>-<slug>` branch,
-- it started from exactly `BASE_SHA`
-  (`git -C "<path>" rev-parse HEAD` equals `BASE_SHA`).
+- there are exactly three worktrees — the primary checkout plus the two new
+  linked worktrees,
+- each created worktree is on its expected `milestone/<number>-<slug>` branch,
+- each created worktree's `HEAD` equals `BASE_SHA`,
+- the primary checkout is still present, on `main`, and clean.
 
-Also confirm the primary checkout is unchanged: still on `main`, still clean,
-still at `BASE_SHA`.
+`verifyCreatedWorktrees` in `.claude/hooks/worktree-decision.mjs` encodes these
+checks against the parsed `git worktree list --porcelain` output.
 
 ## Final report
 

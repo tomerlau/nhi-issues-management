@@ -9,6 +9,7 @@ import {
   isLinkedWorktree,
   worktreeList,
 } from './git-info.mjs';
+import { validateWorktreeRequest, verifyCreatedWorktrees } from './worktree-decision.mjs';
 
 // Run git in a throwaway repo. These tests never touch the real repository and
 // run inside the test process (not via the Bash tool), so repository git
@@ -125,6 +126,55 @@ test('partial worktree creation failure leaves the first worktree intact', () =>
     rmSync(root, { recursive: true, force: true });
     rmSync(wtA, { recursive: true, force: true });
     rmSync(wtB, { recursive: true, force: true });
+  }
+});
+
+test('existing linked worktrees are detected in the worktree list', () => {
+  const { root, baseSha } = setupRepo();
+  const sibling = mkdtempSync(join(tmpdir(), 'nhi-wt-siblings-'));
+  const pathA = join(sibling, 'wt-a');
+  try {
+    // No linked worktrees yet: only the primary checkout is registered.
+    assert.equal(worktreeList(root).length, 1);
+
+    git(['worktree', 'add', '-b', 'milestone/4-a', pathA, baseSha], root);
+
+    const linked = worktreeList(root).filter((e) => e.branch && e.branch.startsWith('milestone/'));
+    assert.equal(linked.length, 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(sibling, { recursive: true, force: true });
+  }
+});
+
+test('verifyCreatedWorktrees confirms two worktrees from the same base SHA', () => {
+  const { root, baseSha } = setupRepo();
+  const sibling = mkdtempSync(join(tmpdir(), 'nhi-wt-verify-'));
+  const pathA = join(sibling, 'wt-a');
+  const pathB = join(sibling, 'wt-b');
+  try {
+    git(['worktree', 'add', '-b', 'milestone/4-a', pathA, baseSha], root);
+    git(['worktree', 'add', '-b', 'milestone/5-b', pathB, baseSha], root);
+
+    const { ok, plan } = validateWorktreeRequest(
+      [
+        { number: 4, slug: 'a', path: pathA },
+        { number: 5, slug: 'b', path: pathB },
+      ],
+      { primaryCheckoutPath: root },
+    );
+    assert.equal(ok, true);
+
+    const result = verifyCreatedWorktrees({
+      worktrees: worktreeList(root),
+      plan,
+      baseSha,
+      primaryCheckoutPath: root,
+    });
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(sibling, { recursive: true, force: true });
   }
 });
 
