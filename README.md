@@ -8,9 +8,12 @@ their own Jira Cloud account by submitting a site URL, Atlassian email, and API
 token. The credentials are validated against Jira before storage, and the API
 token is encrypted at rest and never returned to the frontend.
 
-Earlier milestones added backend-only application authentication: globally
+Earlier milestones added backend-only application authentication (globally
 unique user emails, Argon2id-hashed passwords, persistent server-side sessions,
-secure session cookies, and reusable authentication middleware.
+secure session cookies, and reusable authentication middleware) and the
+authenticated frontend application shell: initial session restoration, login and
+logout, authenticated and unauthenticated states, loading states, and clear
+authentication and network errors.
 
 ## Current milestone scope (Milestone 5: Jira API-token connection)
 
@@ -47,53 +50,62 @@ UI; OAuth 2.0 / 3LO, client id/secret, callbacks, state, or token refresh; a
 reusable Jira API client (owned by M7); Jira project discovery or validation;
 ticket creation; a disconnect endpoint; and production KMS or key rotation.
 
-## Current milestone scope (Milestone 3: Application Authentication)
+## Current milestone scope (Milestone 4: Authenticated application shell)
 
 Implemented:
 
-- Global email uniqueness for users, replacing the Milestone 2 per-tenant
-  uniqueness, via a new migration that rebuilds the `users` table and adds a
-  composite `(tenant_id, id)` key for tenant-aware authentication foreign keys.
-- Password credentials stored separately from the user record in
-  `user_credentials`, hashed with Argon2id via the maintained `argon2` package.
-  The library generates a random salt and returns the standard self-describing
-  PHC hash string, which is stored verbatim. Plaintext passwords are never
-  stored, and hashes are never returned by the user repository or any API
-  response.
-- Persistent server-side sessions in a `sessions` table that stores only the
-  SHA-256 hash of an opaque 256-bit token, the owning tenant and user, and
-  creation/expiration times. Sessions have an absolute eight-hour lifetime.
-- Cookie-based authentication: the raw token is sent only in an `HttpOnly`,
-  `SameSite=Lax`, `Path=/` cookie (`Secure` in production), never in JSON or
-  client-side storage.
-- Authentication endpoints `POST /api/auth/login`, `GET /api/auth/session`, and
-  `POST /api/auth/logout`, all returning `Cache-Control: no-store`.
-- Reusable authentication middleware that resolves the session from the cookie,
-  loads the session and user within their tenant scope, and attaches a typed
-  authenticated context — userId and tenantId always come from the session,
-  never from request input.
-- Idempotent demo seeding extended with deterministic password credentials.
+- A focused frontend authentication API module (`apps/web/src/api/auth.ts`) that
+  calls the three existing `/api/auth/*` endpoints over relative URLs, parses the
+  structured backend error envelope safely, and distinguishes the normal
+  unauthenticated session-restoration result (`user: null`) from invalid
+  credentials, invalid input, network failure, and unexpected server failure. It
+  relies exclusively on the HttpOnly session cookie and never reads, stores, or
+  returns tokens.
+- An explicit frontend authentication state model in `apps/web/src/App.tsx`
+  (`restoring` → `authenticated` / `unauthenticated` / `restore_error`). On load
+  the app calls `GET /api/auth/session`, shows a loading state, then renders the
+  authenticated shell (HTTP 200 with a user) or the login screen (HTTP 200 with
+  `user: null`). A network or unexpected server failure during restoration is
+  shown as a retryable error and is **not** treated as logged out.
+- A login screen (`apps/web/src/components/LoginForm.tsx`) with email and
+  password inputs (`type="password"`), required-field validation, accessible
+  labels and announced errors, disabled submission while pending (no duplicate
+  submits), and a generic invalid-credentials message that never reveals whether
+  an email exists. The password field is cleared after every completed attempt.
+- A minimal authenticated shell (`apps/web/src/components/AuthenticatedShell.tsx`)
+  showing the product name and the authenticated user's display name and email,
+  with a logout action. A failed logout keeps the user authenticated and shows a
+  retryable error rather than pretending the session was revoked. Internal user
+  and tenant IDs are never rendered.
+- Frontend tests (Vitest + React Testing Library) covering session restoration,
+  login, logout, error handling, duplicate-submit prevention, and the exact
+  endpoint methods, paths, and request bodies.
 
 Carried over from earlier milestones:
 
+- Backend-only cookie authentication: `POST /api/auth/login`,
+  `GET /api/auth/session`, `POST /api/auth/logout`, Argon2id password hashing,
+  and SQLite-backed sessions storing only the SHA-256 hash of an opaque 256-bit
+  token. M4 includes one focused M3 contract correction: session restoration now
+  returns HTTP 200 with `{ user: null }` for the normal unauthenticated case
+  instead of HTTP 401. Login and logout behavior are unchanged, and genuine
+  protected routes still return HTTP 401 when unauthenticated.
 - npm-workspaces monorepo with separate `apps/api` (backend) and `apps/web` (frontend).
 - SQLite persistence using the built-in Node.js 24 `node:sqlite` module (no ORM, no external SQLite library).
 - Versioned, transactional, idempotent SQL migrations run by a minimal in-repo migration runner.
 - Per-connection foreign-key enforcement (`PRAGMA foreign_keys = ON`), verified by the database factory.
 - Tenant-scoped repositories: every tenant-owned user read/write requires the owning `tenantId`.
 - Express backend exposing `GET /api/health` (unchanged; unauthenticated and not touching the database).
-- React + Vite frontend showing backend availability with a retry action.
 - Quality gates (ESLint, strict typecheck, Vitest, build) and GitHub Actions CI.
 
-Explicitly **not** implemented in Milestone 3 (deferred to later work):
+Explicitly **not** implemented in Milestone 4 (deferred to later work):
 
-- Authentication UI; the frontend is unchanged.
 - User registration, password reset or change, SSO, or social login.
-- Roles, permissions, API keys, or tenant administration.
+- Roles, permissions, API keys, tenant selection, or tenant administration.
+- Frontend routing, a global state library, a design system, or a generic API client.
 - Rate limiting, account lockout, or other abuse protections.
 - Redis or distributed session storage; sessions are single-instance SQLite.
-- A general-purpose authentication framework.
-- Jira OAuth, Jira credentials/token encryption, Jira API access, or ticket creation.
+- Jira UI, Jira OAuth, Jira API access, or ticket creation.
 
 ## Prerequisites
 
@@ -127,11 +139,15 @@ npm run seed       # idempotent; safe to run repeatedly
 - Backend: http://localhost:3001
 - Health endpoint: http://localhost:3001/api/health (or http://localhost:5173/api/health through the proxy)
 
-`GET /api/health` returns HTTP 200 with exactly `{ "status": "ok" }`.
+`GET /api/health` returns HTTP 200 with exactly `{ "status": "ok" }`. The health
+endpoint remains available for backend liveness checks; the frontend no longer
+renders a health screen.
 
-Stop the backend (or run only `npm run dev --workspace apps/web`) to see the
-frontend switch to its unavailable state; use the retry action after restarting
-the backend.
+Open http://localhost:5173 and the app first restores any existing session, then
+shows either the authenticated shell or the login screen. Seed the demo users
+(`npm run seed`) and sign in with one of the demo accounts below. See
+[Browser-based authentication workflow](#browser-based-authentication-workflow)
+and [Manual validation](#manual-validation) for the full flow.
 
 On startup the backend opens the SQLite database, enables and verifies
 foreign-key enforcement, applies any pending migrations, and only then starts
@@ -201,11 +217,11 @@ Authentication is backend-only and cookie-based. Login accepts only an email and
 password; the backend derives the user and tenant from the stored user record,
 and clients never provide or override `userId` or `tenantId` after login.
 
-| Method & path           | Auth required | Purpose                                            |
-| ----------------------- | ------------- | -------------------------------------------------- |
-| `POST /api/auth/login`  | no            | Verify credentials, create a session, set cookie.  |
-| `GET /api/auth/session` | yes (cookie)  | Return the authenticated user.                     |
-| `POST /api/auth/logout` | no            | Revoke the current session and clear the cookie.   |
+| Method & path           | Auth required | Purpose                                                  |
+| ----------------------- | ------------- | -------------------------------------------------------- |
+| `POST /api/auth/login`  | no            | Verify credentials, create a session, set cookie.        |
+| `GET /api/auth/session` | no            | Return the authenticated user, or `user: null` if none.  |
+| `POST /api/auth/logout` | no            | Revoke the current session and clear the cookie.         |
 
 All three responses include `Cache-Control: no-store`.
 
@@ -232,9 +248,13 @@ whether an email exists:
 Missing or malformed input (non-string fields, empty values, or values over the
 length limits) returns a structured HTTP 400 with code `invalid_request`.
 
-**Session** — `GET /api/auth/session` returns the same safe user shape on success
-and an HTTP 401 with code `unauthenticated` when the cookie is missing, invalid,
-expired, or revoked.
+**Session** — `GET /api/auth/session` always returns HTTP 200. It returns
+`{ "user": <safe user> }` when the session cookie is valid, and `{ "user": null }`
+when the cookie is missing, invalid, expired, or revoked. Restoring an
+unauthenticated session is a normal application state, not a request failure, so
+it deliberately does **not** return 401 (which would surface as a console error
+on initial load). Genuine protected routes still return HTTP 401 when
+unauthenticated, and invalid login credentials still return HTTP 401.
 
 **Logout** — `POST /api/auth/logout` deletes the current session (if any), clears
 the cookie, and is idempotent. It never affects other concurrent sessions.
@@ -248,6 +268,32 @@ raw token lives only in the cookie; only its SHA-256 hash is stored server-side.
 Because sessions are persisted in SQLite, a session survives an API restart as
 long as the same database file is used. See
 [Manual validation](#manual-validation) for end-to-end `curl` examples.
+
+### Browser-based authentication workflow
+
+The frontend (`apps/web`) provides the user-facing authentication experience and
+talks to the backend only over relative `/api/auth/*` requests through the Vite
+dev proxy. It holds no tokens of its own — the browser sends the HttpOnly
+`nhi_session` cookie automatically, and the cookie is not readable from
+JavaScript.
+
+1. On load the app calls `GET /api/auth/session` and shows a brief loading state.
+   - HTTP 200 with a user → the authenticated shell (display name, email, sign-out).
+   - HTTP 200 with `user: null` → the login screen (no console error, because this
+     normal unauthenticated state is not a failed request).
+   - A network or unexpected server error → a retryable "couldn't verify your
+     session" message, **not** the login screen.
+2. Signing in posts the email and password to `POST /api/auth/login`. Invalid
+   credentials show a single generic message; the password field is cleared after
+   every attempt and is never persisted.
+3. A page refresh re-runs step 1, so a valid session is restored automatically
+   and a logged-out browser stays on the login screen.
+4. Signing out posts to `POST /api/auth/logout` and returns to the login screen.
+   If logout fails (network/server), the app keeps you signed in and shows a
+   retryable error rather than pretending the session ended.
+
+Log in with one of the [demo accounts](#demo-data), e.g. `alice@example.com` /
+`acme-alice-demo`.
 
 ## Jira connection (Milestone 5)
 
@@ -425,7 +471,7 @@ curl -i -b alice.cookies http://localhost:3001/api/auth/session
 # Log out (revokes only this session and clears the cookie).
 curl -i -b alice.cookies -c alice.cookies -X POST http://localhost:3001/api/auth/logout
 
-# The session is rejected afterwards (HTTP 401).
+# Afterwards the session is gone (HTTP 200 with {"user":null}).
 curl -i -b alice.cookies http://localhost:3001/api/auth/session
 ```
 
@@ -442,6 +488,43 @@ curl -s -c globex.cookies -X POST http://localhost:3001/api/auth/login \
 curl -s -b bob.cookies http://localhost:3001/api/auth/session       # Acme / Bob
 curl -s -b globex.cookies http://localhost:3001/api/auth/session    # Globex / Alice
 ```
+
+### Browser checklist
+
+With both apps running (`npm run dev`) and the demo users seeded, exercise the
+frontend at http://localhost:5173:
+
+- **Clean startup:** reset/migrate/seed as above, start `npm run dev`, open the
+  app — it shows the login screen.
+- **Login:** sign in with a valid demo account (e.g. `alice@example.com` /
+  `acme-alice-demo`); the shell shows the display name and email.
+- **Refresh while signed in:** reload the page — the session is restored without
+  re-entering credentials.
+- **Logout:** click sign out — the app returns to the login screen.
+- **Refresh after logout:** reload — the login screen stays; the user is not
+  restored.
+- **Invalid password:** sign in with a wrong password — a single generic
+  "Invalid email or password" message appears (it does not reveal whether the
+  email exists), and the password field is cleared.
+- **Empty fields:** submit with empty email and/or password — an inline
+  validation message appears and no request is sent.
+- **Backend down during restoration:** stop the API, reload — a retryable
+  "couldn't verify your session" error appears (not the login screen); restart
+  the API and use **Try again**.
+- **Backend down during login:** stop the API, attempt to sign in — a network
+  error message appears and you remain on the login screen.
+- **Backend down during logout:** while signed in, stop the API, click sign out —
+  a retryable error appears and you stay signed in.
+- **Two users, isolated:** sign in as `bob@example.com` / `acme-bob-demo` in one
+  browser profile (or private window) and `alice@globex.example.com` /
+  `globex-alice-demo` in another — each keeps its own session via its own cookie,
+  and the two tenants (Acme, Globex) remain isolated.
+- **DevTools verification:** in the browser DevTools confirm that
+  `localStorage` and `sessionStorage` hold no session token or password, that no
+  password is retained in the DOM after login, that the authenticated user comes
+  only from the session response (there is no user/tenant selector to override),
+  and that no token, password, or secret appears in network responses, the URL,
+  or the console.
 
 Inspect the database to confirm passwords are hashed and raw tokens are absent
 (requires the `sqlite3` CLI; the application itself does not depend on it):
@@ -506,11 +589,12 @@ enforced by Claude Code, not by this README.
 
 ## How the Vite proxy works
 
-The frontend never calls the backend by absolute URL. It requests the relative
-path `/api/health`. In development, the Vite dev server (`apps/web/vite.config.ts`)
-proxies any request beginning with `/api` to `http://localhost:3001`. This keeps
-the browser talking only to the Vite origin, so no permissive CORS configuration
-is required on the backend.
+The frontend never calls the backend by absolute URL. It requests relative paths
+such as `/api/auth/session`. In development, the Vite dev server
+(`apps/web/vite.config.ts`) proxies any request beginning with `/api` to
+`http://localhost:3001`. This keeps the browser talking only to the Vite origin,
+so no permissive CORS configuration is required on the backend, and the
+same-origin `nhi_session` cookie is sent automatically.
 
 ## Repository structure
 
@@ -529,8 +613,10 @@ is required on the backend.
 │   │   └── test/            # backend Vitest tests
 │   └── web/                 # React + Vite frontend
 │       ├── src/
-│       │   ├── api/         # typed backend API functions
-│       │   ├── App.tsx      # backend-availability UI
+│       │   ├── api/         # typed backend API functions (auth)
+│       │   ├── components/  # LoginForm, AuthenticatedShell
+│       │   ├── App.tsx      # authentication state + shell
+│       │   ├── styles.css   # minimal application styling
 │       │   └── main.tsx     # React entry point
 │       └── test/            # frontend Vitest tests
 ├── docs/

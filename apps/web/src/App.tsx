@@ -1,59 +1,73 @@
 import { useCallback, useEffect, useState } from 'react';
-import { fetchHealth } from './api/health';
+import { restoreSession, type SafeUser } from './api/auth';
+import LoginForm from './components/LoginForm';
+import AuthenticatedShell from './components/AuthenticatedShell';
 
-type BackendStatus = 'loading' | 'connected' | 'unavailable';
-
-const containerStyle: React.CSSProperties = {
-  fontFamily: 'system-ui, sans-serif',
-  maxWidth: '32rem',
-  margin: '4rem auto',
-  padding: '0 1rem',
-  lineHeight: 1.5,
-};
+/**
+ * Explicit authentication state for the application shell:
+ * - `restoring`: the initial `GET /api/auth/session` is in flight.
+ * - `unauthenticated`: no valid session — show the login screen.
+ * - `authenticated`: a valid session — show the application shell.
+ * - `restore_error`: restoration failed for a non-auth reason (network/server),
+ *   which must NOT be treated as logged out.
+ */
+type AuthState =
+  | { status: 'restoring' }
+  | { status: 'unauthenticated' }
+  | { status: 'authenticated'; user: SafeUser }
+  | { status: 'restore_error' };
 
 export default function App() {
-  const [status, setStatus] = useState<BackendStatus>('loading');
+  const [state, setState] = useState<AuthState>({ status: 'restoring' });
 
-  const checkHealth = useCallback((signal?: AbortSignal) => {
-    setStatus('loading');
-    fetchHealth(signal)
-      .then((health) => {
-        setStatus(health.status === 'ok' ? 'connected' : 'unavailable');
+  const restore = useCallback((signal?: AbortSignal) => {
+    setState({ status: 'restoring' });
+    restoreSession(signal)
+      .then((user) => {
+        setState(user ? { status: 'authenticated', user } : { status: 'unauthenticated' });
       })
-      .catch(() => {
-        if (!signal?.aborted) {
-          setStatus('unavailable');
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === 'AbortError') {
+          return;
         }
+        // A network or unexpected server failure is distinct from being logged out.
+        setState({ status: 'restore_error' });
       });
   }, []);
 
   useEffect(() => {
     const controller = new AbortController();
-    checkHealth(controller.signal);
+    restore(controller.signal);
     return () => controller.abort();
-  }, [checkHealth]);
+  }, [restore]);
 
-  return (
-    <main style={containerStyle}>
-      <h1>IdentityHub to Jira</h1>
-      <p>Project foundation (Milestone 1)</p>
+  if (state.status === 'restoring') {
+    return (
+      <main className="auth-card" aria-live="polite">
+        <p>Checking your session…</p>
+      </main>
+    );
+  }
 
-      <section aria-live="polite">
-        {status === 'loading' && <p>Checking backend availability…</p>}
+  if (state.status === 'restore_error') {
+    return (
+      <main className="auth-card" role="alert">
+        <p>We couldn&apos;t verify your session. Please check your connection and try again.</p>
+        <button type="button" onClick={() => restore()}>
+          Try again
+        </button>
+      </main>
+    );
+  }
 
-        {status === 'connected' && (
-          <p role="status">Connected to the backend service.</p>
-        )}
+  if (state.status === 'authenticated') {
+    return (
+      <AuthenticatedShell
+        user={state.user}
+        onLoggedOut={() => setState({ status: 'unauthenticated' })}
+      />
+    );
+  }
 
-        {status === 'unavailable' && (
-          <div role="alert">
-            <p>The backend service is currently unavailable. Please make sure it is running.</p>
-            <button type="button" onClick={() => checkHealth()}>
-              Try again
-            </button>
-          </div>
-        )}
-      </section>
-    </main>
-  );
+  return <LoginForm onAuthenticated={(user) => setState({ status: 'authenticated', user })} />;
 }

@@ -20,22 +20,103 @@ because there is no genuine cross-application code to share.
 
 The frontend and backend are separate applications with separate dependency
 trees, build outputs, and lifecycles. They communicate only over HTTP. The
-frontend holds no backend secrets or configuration; the only thing it knows is
-the relative endpoint `/api/health`.
+frontend holds no backend secrets or configuration; it knows only relative `/api`
+endpoints — currently the authentication endpoints `/api/auth/*`. The backend
+health endpoint `/api/health` remains available separately for liveness checks
+and is not part of the frontend authentication flow.
 
 ## Local request flow
 
 ```
-Browser
+Browser (React app, 5173)
   -> Vite development server (5173)
   -> /api proxy
-  -> Express GET /api/health (3001)
-  -> { "status": "ok" }
+  -> Express /api/auth/* and /api/health (3001)
+  -> JSON response (+ Set-Cookie: nhi_session on login)
 ```
 
 In development the Vite dev server proxies any `/api/*` request to the backend.
 This keeps the browser on a single origin and removes any need for permissive
-CORS on the backend.
+CORS on the backend. Because requests stay same-origin, the browser attaches the
+`HttpOnly` `nhi_session` cookie automatically; the frontend never reads or sets
+it.
+
+## Frontend authentication
+
+The frontend (`apps/web`) is the user-facing authentication experience built on
+the backend endpoints. It keeps the same separation as the rest of the app: it
+holds no secrets, talks to the backend only over relative `/api` requests, and
+derives the authenticated user solely from the backend session response.
+
+### Authentication API module
+
+`src/api/auth.ts` is a small, explicit module — not a generic API client. It
+exposes `restoreSession`, `login`, and `logout`, each calling exactly one
+endpoint, plus a `SafeUser` type and a typed `AuthError`. It reads the structured
+`{ error: { code } }` envelope defensively (never trusting its shape) and the
+`{ user }` success envelope through a `SafeUser` type guard, so a malformed
+response becomes a `server` error rather than a bad render. The normal logged-out
+state is not an error: session restoration always answers HTTP 200 with a
+`{ user }` envelope, and `restoreSession` returns the `SafeUser` when present or
+`null` when `user` is `null`. A missing `user`, an invalid user object, an
+unexpected primitive body, invalid JSON, or any non-200 status (including an
+unexpected 401) all become a `server` failure. Actual API failures are raised as
+a typed `AuthError` whose kind is one of `invalid_credentials`,
+`invalid_request`, `network`, or `server`, and the backend's error *message* is
+deliberately discarded so raw server text never reaches the user. `restoreSession`
+accepts an `AbortSignal` and re-throws `AbortError` unwrapped so an unmounted
+initial load does not flip state.
+
+### Authentication state flow
+
+`src/App.tsx` holds one explicit state value:
+
+```
+restoring ── GET /api/auth/session ──┬─ 200 { user }      ──> authenticated(user)
+                                     ├─ 200 { user: null } ──> unauthenticated
+                                     └─ network/server     ──> restore_error (retryable)
+```
+
+On mount the app calls `GET /api/auth/session` while showing a loading state.
+HTTP 200 with a user renders the authenticated shell; HTTP 200 with `user: null`
+renders the login screen. Because being unauthenticated is a normal state rather
+than a failed request, the endpoint never answers 401 here, so an initial
+unauthenticated load produces no console error. A network or unexpected server
+failure — including an unexpected non-200 response — is a **distinct**
+`restore_error` state with a retry action; it is never collapsed into "logged
+out", because that would let a transient outage masquerade as a sign-out. Because
+restoration re-runs on every load, a refresh restores a valid session
+automatically and leaves a logged-out browser on the login screen.
+
+### Login and logout HTTP flow
+
+The login form owns its own email/password fields and submits to
+`POST /api/auth/login`. On success the backend sets the cookie and returns the
+safe user, which becomes the authenticated state; the password field is cleared
+after every completed attempt and the submit button is disabled while a request
+is in flight, preventing duplicate submissions. Invalid credentials surface a
+single generic message, mirroring the backend's deliberate refusal to reveal
+whether an email exists.
+
+Logout posts to `POST /api/auth/logout`. Success requires both an HTTP success
+status and a body that is exactly `{ status: "ok" }`; a success status with a
+malformed, non-JSON, or unexpected body is treated as a `server` failure. Only a
+proven-complete logout returns the app to the login screen. On a network or
+server failure — including an unverifiable body — it keeps the authenticated
+state and shows a retryable error rather than pretending the session was revoked,
+since the cookie and server-side session may still be live.
+
+### Why no token or credential is stored on the client
+
+The browser holds the session only as the `HttpOnly` `nhi_session` cookie, which
+JavaScript cannot read. The frontend therefore never stores a session token,
+authorization header, or password in React state (beyond the password field while
+a login submits), `localStorage`, `sessionStorage`, the URL, or logs. The
+authenticated principal comes only from the backend session response, and there
+is no UI to assert or override a user or tenant id — keeping the M3 trust boundary
+intact from the browser down. This is the frontend analogue of storing only token
+hashes server-side: the value that authenticates a request never lives anywhere a
+script or a leaked log could replay it.
 
 ## Backend application / startup separation
 
@@ -153,11 +234,20 @@ return the same generic 401, so a client cannot probe which emails exist.
 On success the server generates an opaque session token — 32 random bytes (256
 bits) as URL-safe base64 — records a session row, and returns the token only in
 the session cookie. A session row stores the token's SHA-256 hash, the owning
-tenant and user, and an absolute eight-hour expiry. Session resolution
-(`GET /api/auth/session` and the `requireAuth` middleware) reads the cookie,
-hashes the token, looks up a non-expired session by that hash, and loads the user
-within the session's own `(tenantId, userId)` scope. Logout deletes only the row
-matching the current token hash, leaving every other session intact.
+tenant and user, and an absolute eight-hour expiry. Session resolution reads the
+cookie, hashes the token, looks up a non-expired session by that hash, and loads
+the user within the session's own `(tenantId, userId)` scope. Logout deletes only
+the row matching the current token hash, leaving every other session intact.
+
+Session restoration and protected routes treat a resolved session differently.
+`GET /api/auth/session` is **not** a protected route: it always returns HTTP 200,
+with `{ user: SafeUser }` for a valid session and `{ user: null }` for a missing,
+invalid, expired, or revoked one, because being unauthenticated on initial load
+is a normal application state rather than a request failure. The reusable
+`requireAuth` middleware, which guards genuine protected routes, still rejects an
+unauthenticated request with a generic HTTP 401 and is unchanged. Invalid login
+credentials likewise still return HTTP 401, and all authentication responses
+remain `Cache-Control: no-store`.
 
 ### Authentication: trust boundary
 
