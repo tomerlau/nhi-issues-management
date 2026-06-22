@@ -5,17 +5,19 @@ import {
   JiraApiError,
   messageForKind,
   type JiraConnectionStatus,
+  type JiraErrorKind,
 } from '../api/jira';
 
 /**
  * The panel's load lifecycle for the tenant's shared Jira connection:
  * - `loading`: the initial `GET /api/jira/connection` is in flight.
- * - `error`: the status could not be loaded (retryable).
+ * - `error`: the status could not be loaded; `kind` retains the safe failure
+ *   category so the panel can show category-specific copy.
  * - `ready`: a safe connection status was loaded.
  */
 type LoadState =
   | { status: 'loading' }
-  | { status: 'error' }
+  | { status: 'error'; kind: JiraErrorKind }
   | { status: 'ready'; connection: JiraConnectionStatus };
 
 /**
@@ -58,7 +60,9 @@ export default function JiraConnectionPanel() {
         if (error instanceof DOMException && error.name === 'AbortError') {
           return;
         }
-        setLoad({ status: 'error' });
+        // Preserve the distinct failure category; unknown errors fall back to server.
+        const kind = error instanceof JiraApiError ? error.kind : 'server';
+        setLoad({ status: 'error', kind });
       });
   }, []);
 
@@ -129,15 +133,22 @@ export default function JiraConnectionPanel() {
   }
 
   if (load.status === 'error') {
+    // An expired session cannot be recovered by retrying the request: ask the
+    // user to refresh or sign in again instead of offering a futile retry.
+    const authFailure = load.kind === 'authentication';
     return (
       <section className="jira-panel" aria-labelledby={headingId}>
         <h2 id={headingId}>Jira connection</h2>
         <p className="form-error" role="alert">
-          We couldn&apos;t load the Jira connection. Please try again.
+          {authFailure
+            ? 'Your session is no longer valid. Please refresh the page or sign in again.'
+            : messageForKind(load.kind)}
         </p>
-        <button type="button" onClick={() => refresh()}>
-          Try again
-        </button>
+        {!authFailure && (
+          <button type="button" onClick={() => refresh()}>
+            Try again
+          </button>
+        )}
       </section>
     );
   }
@@ -254,8 +265,9 @@ export default function JiraConnectionPanel() {
               aria-describedby={formError ? `${tokenHintId} ${errorId}` : tokenHintId}
             />
             <p id={tokenHintId} className="field-hint">
-              Use an unscoped Atlassian API token. It is sent securely, never
-              stored in your browser, and never shown again.
+              Use an unscoped Atlassian API token. The token is sent to the
+              backend only for this request, is not stored in your browser, and is
+              never shown again.
             </p>
           </div>
 

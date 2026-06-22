@@ -596,8 +596,12 @@ The Atlassian API token is treated as a secret in the form:
 - `siteUrl` and `email` use ordinary local React state.
 
 It is expected that the submitted token is present transiently in the outgoing
-HTTPS request payload, which is visible to the user who owns the browser session;
-the application does not and cannot hide it from that user.
+request body, which is visible to the user who owns the browser session; the
+application does not and cannot hide it from that user. Local development sends
+this request over plain HTTP on the loopback interface (the Vite dev server and
+the API both run on `localhost`), so the local request is **not** encrypted. Any
+non-local or production deployment must terminate the connection over HTTPS/TLS so
+the token is not exposed in transit.
 
 ### Manual validation: Jira connection UI (Milestone 6)
 
@@ -634,7 +638,9 @@ a real Jira Cloud site, account email, and **unscoped** API token.
    DOM after submission, API responses, or the console; and confirm it is absent
    from application logs, the database token field, generated files, and
    `git status`. It is expected that the submitted token appears transiently in
-   the outgoing HTTPS request payload visible to the browser's own user.
+   the outgoing request body visible to the browser's own user. Note that local
+   development uses plain HTTP on the loopback interface, so this local request
+   is not encrypted; a production deployment must use HTTPS/TLS.
 7. **Regression.** Confirm session restoration on refresh, login, logout success,
    and logout-failure behavior (stop the API, sign out → retryable error, stays
    signed in) all continue to work with the panel mounted.

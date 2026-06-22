@@ -243,14 +243,24 @@ cumulatively as later milestones add functionality.
     tenant scope.
 - **The token is a transient browser secret.** It is entered through an
   uncontrolled `type="password"` input, read only via a DOM ref at submit time,
-  cleared immediately once captured, never stored in React state or any browser
-  storage, and never retained for a retry. It is expected to appear transiently
-  only in the outgoing HTTPS request payload, which is visible to the browser's
-  own user.
+  cleared immediately once an actual POST submission begins, never stored in
+  React state or any browser storage, and never retained for a retry. It is
+  expected to appear transiently only in the outgoing request body, which is
+  visible to the browser's own user.
+  - **Transport (POC assumption):** local development runs the Vite dev server
+    and the API over plain HTTP on the loopback interface, so the local request
+    is **not** encrypted.
+  - **Production alternative:** any non-local or production deployment must
+    terminate traffic over HTTPS/TLS so the token is protected in transit.
+  - **Tradeoff:** plain-HTTP loopback keeps local setup friction low; the
+    not-stored-in-the-browser guarantees hold regardless of transport, but
+    transport encryption is a deployment responsibility, not a client-state one.
 - **Errors and status are safe by construction.** The UI maps backend error
-  codes to generic copy, never renders raw backend/Jira messages or credential
-  material, and a failed replacement leaves the previously loaded connection
-  visible and active.
+  codes (including each distinct status-load failure: configuration,
+  authentication, network, Jira availability, timeout, and unexpected-server)
+  to safe category-specific copy, never renders raw backend/Jira messages or
+  technical error codes, and a failed replacement leaves the previously loaded
+  connection visible and active.
 - **Deferred:** Jira project input/discovery/validation; ticket creation and a
   recent-tickets view; a disconnect button; roles, permissions, or a
   tenant-admin UI; API-key functionality; browser credential persistence; global

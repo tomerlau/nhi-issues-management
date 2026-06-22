@@ -107,6 +107,80 @@ describe('initial states', () => {
   });
 });
 
+describe('status-load failures keep distinct, safe categories', () => {
+  it('shows configuration copy for not_configured (retryable)', async () => {
+    mockedGet.mockRejectedValue(new JiraApiError('not_configured', 'RAW server detail'));
+
+    render(<JiraConnectionPanel />);
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/not configured/i);
+    expect(alert).not.toHaveTextContent(/RAW server detail/);
+    expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument();
+  });
+
+  it('shows a sign-in/refresh message and no retry for an authentication failure', async () => {
+    mockedGet.mockRejectedValue(new JiraApiError('authentication', 'RAW auth detail'));
+
+    render(<JiraConnectionPanel />);
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/session is no longer valid/i);
+    expect(alert).toHaveTextContent(/refresh|sign in/i);
+    expect(alert).not.toHaveTextContent(/RAW auth detail/);
+    expect(screen.queryByRole('button', { name: /try again/i })).not.toBeInTheDocument();
+  });
+
+  it('shows network copy for a network failure (retryable)', async () => {
+    mockedGet.mockRejectedValue(new JiraApiError('network', 'x'));
+
+    render(<JiraConnectionPanel />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/unable to reach the server/i);
+    expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument();
+  });
+
+  it('shows unreachable copy for a Jira availability failure (retryable)', async () => {
+    mockedGet.mockRejectedValue(new JiraApiError('unreachable', 'x'));
+
+    render(<JiraConnectionPanel />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/could not be reached/i);
+    expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument();
+  });
+
+  it('shows timeout copy for a Jira timeout failure (retryable)', async () => {
+    mockedGet.mockRejectedValue(new JiraApiError('timeout', 'x'));
+
+    render(<JiraConnectionPanel />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/did not respond in time/i);
+    expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument();
+  });
+
+  it('falls back to generic server copy for an unknown error (retryable)', async () => {
+    mockedGet.mockRejectedValue(new Error('boom'));
+
+    render(<JiraConnectionPanel />);
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/something went wrong/i);
+    expect(alert).not.toHaveTextContent(/boom/);
+    expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument();
+  });
+
+  it('recovers through Try again after a typed load failure', async () => {
+    mockedGet.mockRejectedValueOnce(new JiraApiError('unreachable', 'x'));
+    mockedGet.mockResolvedValueOnce({ connected: false });
+
+    render(<JiraConnectionPanel />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /try again/i }));
+
+    expect(await screen.findByRole('button', { name: /^connect jira$/i })).toBeInTheDocument();
+  });
+});
+
 describe('successful submissions', () => {
   it('connects from the disconnected state and shows created feedback', async () => {
     await renderDisconnected();

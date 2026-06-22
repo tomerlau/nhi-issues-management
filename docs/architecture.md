@@ -149,9 +149,17 @@ and the module logs nothing.
 shell. It owns a small load state (`loading` → `ready` / `error`) plus the safe
 connection status, and renders the disconnected form, the connected summary
 (safe site URL and email only), the shared-tenant explanation, the create/replace
-flow, and a retryable load-error state. It derives the displayed status solely
-from the backend response; it never renders internal user/tenant/connection IDs,
-account IDs, audit metadata, encrypted data, or credential material.
+flow, and a load-error state. The load-error state retains the safe
+`JiraErrorKind` from a rejected `getJiraConnection` (falling back to `server` for
+an unknown error, and ignoring `AbortError`), so it shows category-specific copy
+— configuration, availability, timeout, network, or generic — instead of one
+collapsed message, and offers a **Try again** retry where retrying is meaningful.
+An authentication failure is the exception: it explains the session is no longer
+valid and asks the user to refresh or sign in again rather than offering a futile
+retry. It derives the displayed status solely from the backend response; it never
+renders raw backend messages, technical error codes, internal
+user/tenant/connection IDs, account IDs, audit metadata, encrypted data, or
+credential material.
 
 ### Why the API token is never held in client state
 
@@ -168,6 +176,14 @@ leaked store could replay it. A failed save preserves the previously loaded
 connection unchanged and forces the token to be re-entered for another attempt,
 matching the backend guarantee that a failed replacement never disturbs the
 stored connection.
+
+The token therefore lives only transiently in the outgoing request body; the
+client makes no claim about transport encryption. Local development runs both the
+Vite dev server and the API over plain HTTP on the loopback interface, so the
+local request is not encrypted. Any non-local or production deployment must
+terminate traffic over HTTPS/TLS so the token is protected in transit. This is a
+deployment concern, not a client-state concern: the not-stored-in-the-browser
+guarantees above hold regardless of transport.
 
 ## Backend application / startup separation
 
