@@ -207,7 +207,7 @@ export default function JiraConnectionPanel() {
       )}
 
       {showForm && (
-        <form className="jira-form" onSubmit={handleSubmit} noValidate>
+        <form className="jira-form" onSubmit={handleSubmit} noValidate autoComplete="off">
           <h3>
             {connection.connected ? 'Replace the shared connection' : 'Connect Jira Cloud'}
           </h3>
@@ -216,7 +216,7 @@ export default function JiraConnectionPanel() {
             <label htmlFor={siteUrlId}>Jira Cloud site URL</label>
             <input
               id={siteUrlId}
-              name="siteUrl"
+              name="jiraSiteUrl"
               type="url"
               inputMode="url"
               autoComplete="off"
@@ -239,9 +239,12 @@ export default function JiraConnectionPanel() {
             <label htmlFor={emailId}>Atlassian account email</label>
             <input
               id={emailId}
-              name="email"
-              type="email"
+              name="jiraAccountEmail"
+              type="text"
+              inputMode="email"
               autoComplete="off"
+              autoCapitalize="none"
+              spellCheck={false}
               value={email}
               onChange={(event) => setEmail(event.target.value)}
               disabled={submitting}
@@ -255,9 +258,9 @@ export default function JiraConnectionPanel() {
             <label htmlFor={tokenId}>Atlassian API token</label>
             <input
               id={tokenId}
-              name="apiToken"
+              name="jiraApiToken"
               type="password"
-              autoComplete="off"
+              autoComplete="new-password"
               ref={tokenRef}
               disabled={submitting}
               required

@@ -601,6 +601,13 @@ The Atlassian API token is treated as a secret in the form:
   never retried automatically: a completed POST attempt (successful or failed)
   requires re-entering the token.
 - `siteUrl` and `email` use ordinary local React state.
+- The Jira fields are kept independent of the IdentityHub login form so a browser
+  password manager does not autofill them: the form carries `autocomplete="off"`,
+  the inputs use Jira-specific names (`jiraSiteUrl`, `jiraAccountEmail`,
+  `jiraApiToken`), the email input is `type="text"` with `inputMode="email"` plus
+  `autoComplete="off"`/`autoCapitalize="none"`/`spellCheck=false`, and the token
+  input uses `autoComplete="new-password"`. No Jira field value is ever derived
+  from the authenticated application user.
 
 It is expected that the submitted token is present transiently in the outgoing
 request body, which is visible to the user who owns the browser session; the
@@ -621,6 +628,12 @@ a real Jira Cloud site, account email, and **unscoped** API token.
    The Jira panel loads the **disconnected** state. Enter a valid Jira site URL,
    Atlassian email, and unscoped API token, and connect. Confirm the panel shows
    the **connected** state with the safe site URL and email only.
+   - **Autofill independence.** With the IdentityHub login credentials saved in
+     Chrome's password manager, open or reload the Jira connection form and
+     confirm all three Jira fields stay empty — the saved IdentityHub password
+     must not be inserted into the API-token field, and the email field must not
+     be prefilled with the signed-in user. Then enter valid Jira credentials
+     manually and confirm the connection still succeeds.
 2. **Same-tenant sharing.** In a separate browser profile or private window, sign
    in as Bob (`bob@example.com` / `acme-bob-demo`). Confirm Bob sees the same
    shared connection. Replace it as Bob, then refresh as Alice and confirm she

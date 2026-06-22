@@ -298,6 +298,51 @@ describe('failed replacement keeps the existing connection', () => {
   });
 });
 
+describe('autofill mitigation: Jira fields are independent of the login form', () => {
+  it('marks the form with autocomplete="off"', async () => {
+    await renderDisconnected();
+
+    expect(tokenInput().closest('form')).toHaveAttribute('autocomplete', 'off');
+  });
+
+  it('starts every Jira field empty, with no value derived from the signed-in user', async () => {
+    await renderDisconnected();
+
+    expect((screen.getByLabelText(/site url/i) as HTMLInputElement).value).toBe('');
+    const emailField = screen.getByLabelText(/account email/i) as HTMLInputElement;
+    expect(emailField.value).toBe('');
+    expect(emailField.value).not.toBe('alice@example.com');
+    expect(tokenInput().value).toBe('');
+  });
+
+  it('gives the site URL field a Jira-specific name', async () => {
+    await renderDisconnected();
+
+    expect(screen.getByLabelText(/site url/i)).toHaveAttribute('name', 'jiraSiteUrl');
+  });
+
+  it('uses a Jira-specific name and autofill-resistant attributes on the email field', async () => {
+    await renderDisconnected();
+
+    const emailField = screen.getByLabelText(/account email/i);
+    expect(emailField).toHaveAttribute('name', 'jiraAccountEmail');
+    expect(emailField).toHaveAttribute('type', 'text');
+    expect(emailField).toHaveAttribute('inputmode', 'email');
+    expect(emailField).toHaveAttribute('autocomplete', 'off');
+    expect(emailField).toHaveAttribute('autocapitalize', 'none');
+    expect(emailField).toHaveAttribute('spellcheck', 'false');
+  });
+
+  it('uses a password token field with a Jira-specific name and new-password autocomplete', async () => {
+    await renderDisconnected();
+
+    const token = tokenInput();
+    expect(token).toHaveAttribute('type', 'password');
+    expect(token).toHaveAttribute('name', 'jiraApiToken');
+    expect(token).toHaveAttribute('autocomplete', 'new-password');
+  });
+});
+
 describe('API token secret handling', () => {
   it('uses a password input for the token', async () => {
     await renderDisconnected();
