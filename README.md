@@ -110,7 +110,8 @@ Implemented:
 - A focused `TicketCreationPanel` component
   (`apps/web/src/components/TicketCreationPanel.tsx`) with accessible labels,
   `role="alert"`/`role="status"` feedback, client-side usability validation
-  matching the documented limits, uppercase project-key normalization, disabled
+  matching the documented limits, project-key normalization to uppercase on submit
+  (the input preserves the casing the user types), disabled
   controls and duplicate-submit prevention while pending, clear success feedback
   including the returned issue key (clearing the title/description and keeping the
   project key), and a distinct uncertain-outcome warning advising the user to
@@ -976,7 +977,7 @@ from the server-side session and backend):
 
 | Field         | Client-side usability limit                                                       |
 | ------------- | --------------------------------------------------------------------------------- |
-| Project key   | Normalized to uppercase; 2–10 characters matching `^[A-Z][A-Z0-9]+$`.              |
+| Project key   | Case-insensitive; entered casing is preserved while editing and normalized to uppercase on submit; 2–10 characters matching `^[A-Z][A-Z0-9]+$` after normalization. |
 | Title         | Non-empty after trimming; at most 255 characters.                                 |
 | Description   | Non-empty after trimming; at most 5000 characters; internal line breaks preserved. |
 
@@ -1062,8 +1063,13 @@ can create `Task` issues in.
    **correct project**, as a fixed **`Task`**, with the title mapped to the summary
    and the description preserved (including internal line breaks), and that the UI
    shows the returned **issue key**.
-3. **Project-key normalization.** Enter the project key in lowercase and confirm
-   it is displayed and submitted as uppercase.
+3. **Project-key casing and normalization.** Enter the project key in lowercase
+   (e.g. `scrum`) and confirm the input **preserves the entered casing while
+   typing**; on submit, confirm the request sends the canonical uppercase value
+   (`SCRUM`) and that creation succeeds. Project keys are case-insensitive — the
+   frontend normalizes to uppercase on submit and the backend independently trims
+   and uppercases before validation — so lowercase input is valid. Uppercase is
+   used for consistency and provenance, not because Jira rejects lowercase input.
 4. **Local validation.** Submit with empty fields, an over-255-character title, or
    an over-5000-character description, and confirm each is rejected inline before
    any network request (DevTools Network shows no `POST /api/tickets`).

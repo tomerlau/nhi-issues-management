@@ -156,10 +156,10 @@ export default function TicketCreationPanel() {
             name="projectKey"
             type="text"
             autoComplete="off"
-            autoCapitalize="characters"
+            autoCapitalize="none"
             spellCheck={false}
             value={projectKey}
-            onChange={(event) => setProjectKey(event.target.value.toUpperCase())}
+            onChange={(event) => setProjectKey(event.target.value)}
             disabled={submitting}
             required
             aria-invalid={feedback !== null && !feedback.uncertain}
@@ -168,7 +168,8 @@ export default function TicketCreationPanel() {
             }
           />
           <p id={projectKeyHintId} className="field-hint">
-            The Jira project key, for example SCRUM. It is normalized to uppercase.
+            The Jira project key, for example scrum. Project keys are
+            case-insensitive and are normalized to uppercase when submitted.
           </p>
         </div>
 

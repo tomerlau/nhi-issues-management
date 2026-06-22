@@ -426,6 +426,13 @@ cumulatively as later milestones add functionality.
   mirrors the backend limits (project-key syntax and 2–10 length, non-empty title
   ≤ 255, non-empty description ≤ 5000 with internal line breaks preserved) to
   avoid an obviously invalid round-trip; the backend remains authoritative.
+- **Project keys are case-insensitive; entered casing is preserved while editing.**
+  The input shows exactly what the user types (lowercase or mixed case); the
+  frontend trims and uppercases only when validating and submitting, and the
+  backend independently trims and uppercases before its own validation. Lowercase
+  input such as `scrum` is valid and becomes the canonical `SCRUM`. Uppercase is
+  the canonical form used for consistency and provenance, not because Jira rejects
+  lowercase input.
 - **The form is shown only when the tenant connection has loaded as connected.**
   The connection panel reports its loaded state upward through a small callback
   and the shell gates the ticket panel on it, so no second connection-status

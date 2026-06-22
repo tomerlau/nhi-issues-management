@@ -750,23 +750,36 @@ must not be silently duplicated.
 ### Ticket creation panel
 
 `src/components/TicketCreationPanel.tsx` owns the controlled `projectKey`/`title`/
-`description` fields (the project key is normalized to uppercase as it is typed),
-the submit lifecycle, and the success/error feedback. Client-side validation
-mirrors the backend limits (project-key syntax and 2–10 length, non-empty bounded
-title ≤ 255 and description ≤ 5000, internal description line breaks preserved) but
-is explicitly only a usability aid, not a security boundary — the backend stays
-authoritative. A client validation failure shows an inline `role="alert"` message
+`description` fields (the project-key input preserves exactly the casing the user
+types and is normalized to uppercase only on submit), the submit lifecycle, and
+the success/error feedback. Project keys are case-insensitive: the frontend trims
+and uppercases the value when validating and submitting, and the backend
+independently trims and uppercases it before its own validation, so lowercase
+input such as `scrum` is valid and becomes the canonical `SCRUM`. Uppercase is the
+canonical form used for consistency and provenance, not because Jira rejects
+lowercase input. Client-side validation mirrors the backend limits (project-key
+syntax and 2–10 length, non-empty bounded title ≤ 255 and description ≤ 5000,
+internal description line breaks preserved) but is explicitly only a usability
+aid, not a security boundary — the backend stays authoritative. A client validation failure shows an inline `role="alert"` message
 and makes no network request. While a request is in flight all controls are
 disabled and a re-entrant submit is ignored, so duplicate submissions cannot
 produce more than one request. On HTTP 201 the panel announces the returned issue
 key through a `role="status"` region, clears the title and description, and keeps
 the project key so the user can file another ticket in the same project. Each
 documented failure renders safe, category-specific copy; an expired session is
-treated distinctly from retryable failures; and the two *uncertain* outcomes
-(`jira_timeout` and the generic `jira_unreachable`) render a distinct warning that
-Jira may have created the issue and that the user should check Jira before retrying
-because a retry may create a duplicate — matching the approved Milestone 8 POC
-tradeoff that ticket creation is not idempotent. Raw backend/Jira text, technical
+treated distinctly from retryable failures; and every *uncertain* outcome renders
+a distinct warning that Jira may already have created the issue and that the user
+should check Jira before retrying because a retry may create a duplicate. Because
+ticket creation is not idempotent, the uncertain class is not limited to upstream
+timeouts: it covers `jira_timeout`, the generic `jira_unreachable`, a
+browser/network failure after submission where the response is never observed,
+`internal_error` (which can mean Jira created the issue but the backend then failed
+to record provenance or build the response), and any malformed or unexpected
+server/success response. All of these may occur after Jira created the issue, so
+the UI warns the ticket may already exist, tells the user to check Jira before
+retrying, warns that retrying may create a duplicate, and never retries
+automatically — matching the approved Milestone 8 POC tradeoff that ticket
+creation is not idempotent. Raw backend/Jira text, technical
 error codes, credentials, session values, and internal IDs are never rendered, and
 form contents live only in transient React state (never browser storage, the URL,
 or global state).

@@ -137,12 +137,14 @@ describe('request payload', () => {
     });
   });
 
-  it('shows the normalized uppercase project key in the input as the user types', () => {
+  it('preserves the entered casing in the input while typing', () => {
     render(<TicketCreationPanel />);
 
     fill(/project key/i, 'scrum');
+    expect((screen.getByLabelText(/project key/i) as HTMLInputElement).value).toBe('scrum');
 
-    expect((screen.getByLabelText(/project key/i) as HTMLInputElement).value).toBe('SCRUM');
+    fill(/project key/i, 'ScRuM');
+    expect((screen.getByLabelText(/project key/i) as HTMLInputElement).value).toBe('ScRuM');
   });
 });
 
@@ -183,11 +185,11 @@ describe('loading and duplicate submission', () => {
 });
 
 describe('success behavior', () => {
-  it('shows the returned issue key and clears title and description but keeps the project key', async () => {
+  it('shows the returned issue key and clears title and description but retains the canonical uppercase project key', async () => {
     render(<TicketCreationPanel />);
     mockedCreate.mockResolvedValue(created);
 
-    fillForm();
+    fillForm({ projectKey: 'scrum' });
     submit();
 
     const status = await screen.findByRole('status');
