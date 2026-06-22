@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../src/App';
 import { AuthError, login, logout, restoreSession, type SafeUser } from '../src/api/auth';
+import { getJiraConnection } from '../src/api/jira';
 
 vi.mock('../src/api/auth', async () => {
   const actual = await vi.importActual<typeof import('../src/api/auth')>('../src/api/auth');
@@ -13,9 +14,21 @@ vi.mock('../src/api/auth', async () => {
   };
 });
 
+// The authenticated shell mounts the Jira panel, which loads its status on mount.
+// Stub it so these auth-focused tests never make a real network request.
+vi.mock('../src/api/jira', async () => {
+  const actual = await vi.importActual<typeof import('../src/api/jira')>('../src/api/jira');
+  return {
+    ...actual,
+    getJiraConnection: vi.fn(),
+    saveJiraConnection: vi.fn(),
+  };
+});
+
 const mockedRestore = vi.mocked(restoreSession);
 const mockedLogin = vi.mocked(login);
 const mockedLogout = vi.mocked(logout);
+const mockedGetJira = vi.mocked(getJiraConnection);
 
 const alice: SafeUser = {
   id: 'user-acme-alice',
@@ -37,10 +50,33 @@ async function renderLoggedOut() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockedGetJira.mockResolvedValue({ connected: false });
 });
 
 afterEach(() => {
   cleanup();
+});
+
+describe('product branding', () => {
+  it('uses the product name in the login heading and not the old name', async () => {
+    await renderLoggedOut();
+
+    expect(
+      screen.getByRole('heading', { name: /sign in to NHI Issues Management/i }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/IdentityHub to Jira/i)).not.toBeInTheDocument();
+  });
+
+  it('uses the product name in the authenticated header and subtitle', async () => {
+    mockedRestore.mockResolvedValue(alice);
+
+    render(<App />);
+    await screen.findByText(/welcome, alice anderson/i);
+
+    expect(within(screen.getByRole('banner')).getByText('NHI Issues Management')).toBeInTheDocument();
+    expect(screen.getByText('You are signed in to NHI Issues Management.')).toBeInTheDocument();
+    expect(screen.queryByText(/IdentityHub to Jira/i)).not.toBeInTheDocument();
+  });
 });
 
 describe('session restoration', () => {

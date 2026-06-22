@@ -14,6 +14,8 @@ cumulatively as later milestones add functionality.
 - Milestone 4 adds the frontend authenticated application shell on top of the
   Milestone 3 backend, without changing the backend authentication contract.
 - Milestone 5 adds a backend-only Jira API-token connection.
+- Milestone 6 adds the frontend Jira connection UI on top of the Milestone 5
+  backend, without changing the backend Jira contract.
 - Milestone 7 adds a backend-only Jira integration layer: one central Jira
   client and a tenant-scoped integration service that validates a Jira project
   against the authenticated tenant's shared connection, plus a move from v1 to
@@ -31,6 +33,18 @@ cumulatively as later milestones add functionality.
   `localStorage`, `sessionStorage`, the URL, or logs, and derives the
   authenticated user only from the backend session response. There is no UI to
   select or override a user or tenant id.
+- The Jira connection UI (Milestone 6) follows the same boundary. The Atlassian
+  API token is entered through an uncontrolled secret input, read only via a DOM
+  ref at submit time, cleared from the input immediately when an actual POST
+  request begins (a client-side validation failure before a request retains the
+  input value so the user can correct the other fields), and never
+  placed in React state or any browser storage (`localStorage`, `sessionStorage`,
+  IndexedDB, cookies, URLs, or logs). It exists only transiently in the submit
+  call and the outgoing request body, is never retained for a retry, and is never
+  returned by the backend. `siteUrl` and `email` use ordinary local React state.
+  The UI displays only the safe connection status (connected flag, site URL,
+  email) and never renders internal IDs, account IDs, audit metadata, encrypted
+  data, or credential material.
 
 ## Backend
 
@@ -272,3 +286,43 @@ cumulatively as later milestones add functionality.
   authentication; Jira project discovery or search; configurable issue types;
   custom fields; OAuth/3LO/refresh tokens/rotation; and Jira Server / Data
   Center support.
+
+## Jira connection UI (Milestone 6)
+
+- **Frontend only.** The UI consumes the unchanged Milestone 5 backend contract
+  (`GET`/`POST /api/jira/connection`); no backend behavior changed.
+- **Any authenticated tenant user may create or replace the shared connection,**
+  matching the backend authorization model: `configured_by_user_id` is audit
+  metadata only, not an authorization boundary, so the UI offers the
+  create/replace action to every authenticated tenant user.
+  - **Production alternative:** restrict creating or replacing the shared
+    integration to authorized tenant administrators with roles and permissions.
+  - **Tradeoff:** allowing every tenant user keeps roles and tenant
+    administration out of this POC while keeping the integration shared at the
+    tenant scope.
+- **The token is a transient browser secret.** It is entered through an
+  uncontrolled `type="password"` input, read only via a DOM ref at submit time,
+  cleared immediately when an actual POST request begins, never stored in
+  React state or any browser storage, and never retained for a retry. If
+  client-side validation fails before a request is made, the uncontrolled input
+  retains its value so the user can correct the other fields. It is
+  expected to appear transiently only in the outgoing request body, which is
+  visible to the browser's own user.
+  - **Transport (POC assumption):** local development accesses the frontend and
+    API through `localhost` over plain HTTP, so the local request is **not**
+    protected by TLS.
+  - **Production alternative:** any non-local or production deployment must use
+    HTTPS/TLS so the token is not exposed in transit.
+  - **Tradeoff:** plain-HTTP local access keeps setup friction low; the
+    not-stored-in-the-browser guarantees hold regardless of transport, but
+    transport encryption is a deployment responsibility, not a client-state one.
+- **Errors and status are safe by construction.** The UI maps backend error
+  codes (including each distinct status-load failure: configuration,
+  authentication, network, Jira availability, timeout, and unexpected-server)
+  to safe category-specific copy, never renders raw backend/Jira messages or
+  technical error codes, and a failed replacement leaves the previously loaded
+  connection visible and active.
+- **Deferred:** Jira project input/discovery/validation; ticket creation and a
+  recent-tickets view; a disconnect button; roles, permissions, or a
+  tenant-admin UI; API-key functionality; browser credential persistence; global
+  frontend state; and frontend routing.
