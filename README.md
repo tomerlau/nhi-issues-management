@@ -2,11 +2,17 @@
 
 A focused proof of concept for integrating Oasis Security IdentityHub with Jira.
 
-This repository is built in milestones. The current milestone (Milestone 7)
-adds a backend-only Jira integration layer: one central Jira client and a
-tenant-scoped integration service that validates a Jira project against the
-authenticated tenant's shared connection. It also moves Jira credential
-encryption to a tenant-only v2 format and deletes the older v1 connections.
+This repository is built in milestones. The current milestone (Milestone 8)
+adds a backend-only ticket-creation domain service: an authenticated
+`POST /api/tickets` endpoint that creates a fixed-`Task` Jira Cloud issue against
+the tenant's shared connection and records minimal local provenance for the
+created issue. It builds on the Milestone 7 integration layer.
+
+Milestone 7 added the backend-only Jira integration layer this builds on: one
+central Jira client and a tenant-scoped integration service that validates a Jira
+project against the authenticated tenant's shared connection. It also moved Jira
+credential encryption to a tenant-only v2 format and deleted the older v1
+connections.
 
 Milestone 5 added the backend-only Jira API-token connection that this builds
 on: an authenticated user connects a Jira Cloud account by submitting a site
@@ -81,7 +87,71 @@ scoped API-token support; roles, permissions, or tenant-admin UI; API-key
 functionality; browser credential persistence; global frontend state; and
 routing.
 
-## Current milestone scope (Milestone 7: Jira integration layer)
+## Current milestone scope (Milestone 8: Ticket creation domain service)
+
+Backend only. Milestone 8 adds the first ticket-creation flow: an authenticated
+user creates a fixed-`Task` Jira issue in a project against the tenant's shared
+connection, and the application records local provenance for the created issue.
+
+Implemented:
+
+- **`POST /api/tickets`** (`apps/api/src/jira/ticket-routes.ts`), session
+  authenticated and returning `Cache-Control: no-store`. It accepts only
+  `projectKey`, `title`, and `description`; `tenantId` and the creating `userId`
+  come solely from the session. Any client-supplied `tenantId`, `userId`,
+  `connectionId`, `siteUrl`, `issueType`, or ownership field is ignored. The body
+  is fully validated (project-key syntax and length, non-empty bounded title and
+  description, internal line breaks preserved) before any Jira network request,
+  with no validation framework.
+- **A `createIssue` operation on the central Jira client** that performs
+  `POST /rest/api/3/issue` with the fixed, non-subtask `Task` issue type resolved
+  by Milestone 7, the validated canonical project id, the title as the summary,
+  and the description rendered as a minimal ADF document preserving internal line
+  breaks. It runtime-validates the response (non-empty issue id and key) and
+  returns only sanitized outcomes; no raw Jira content leaks. It remains
+  Jira-specific, not a general SDK.
+- **A `createTicket` operation on the tenant-scoped integration service**
+  (`jira-integration-service.ts`) that loads the connection once, re-validates the
+  site URL, decrypts the token just-in-time, constructs a single short-lived
+  client, and uses that **same** client and connection for both project validation
+  and issue creation — so a concurrent connection replacement can never split the
+  two. It returns the sanitized issue id/key plus the exact connection and project
+  metadata used.
+- **A ticket-creation domain service** (`ticket-service.ts`) and a focused
+  provenance table (`jira_ticket_provenance`, migration
+  `006_jira_ticket_provenance.sql`) plus repository. Provenance is inserted **only
+  after** Jira confirms a successful creation; no pending row is written
+  beforehand. The table stores only identifiers and an audit trail (provenance id,
+  tenant id, creating user id, connection id, a site-URL snapshot, project id/key,
+  issue id/key, local timestamp) — never the title, description, credentials, or
+  any raw Jira response. Tenant-safe composite foreign keys and a
+  `UNIQUE (tenant_id, jira_site_url, jira_issue_id)` constraint prevent duplicates.
+- **Sanitized HTTP outcome mapping**: 201 on creation; 400 invalid input; 401
+  unauthenticated; 409 not connected; 422 project inaccessible or `Task`
+  unsupported; 502 `jira_credentials_rejected` when the stored credentials are
+  rejected, or 502 `jira_unreachable` for an invalid response / unavailable
+  upstream; 503 not configured or credentials undecryptable; 504 timeout; 500 on a
+  provenance persistence failure. No raw Jira content, tokens, or internal detail
+  ever leak.
+
+Approved POC behavior: Jira creation and SQLite provenance persistence are
+sequential and **not** a distributed transaction, so not every issue Jira creates
+is guaranteed a local provenance row. If Jira confirms the creation but provenance
+persistence fails, the result is `persistence_failed` (HTTP 500); if Jira may have
+created the issue but the request times out before the response is read, the
+result is a timeout (HTTP 504). In both cases the issue may exist in Jira while
+remaining untracked locally. There is no idempotency key, durable operation
+tracking, safe retry, reconciliation, compensating deletion, or worker/queue, so
+an immediate retry after a timeout may create a duplicate issue.
+
+Explicitly **not** implemented in Milestone 8: any frontend or ticket-creation
+UI; a recent-tickets list or any read/query endpoint; editing, deleting, or
+transitioning issues; external application API-key authentication; Jira project
+discovery or search; configurable issue types, custom fields, labels, components,
+or assignees; idempotency keys, retries, workers, queues, reconciliation,
+compensating deletion, webhooks; and Jira Server / Data Center support.
+
+## Earlier milestone scope (Milestone 7: Jira integration layer)
 
 Backend only. Milestone 7 provides one secure abstraction for authenticated Jira
 Cloud API access using the authenticated tenant's shared connection.
@@ -315,6 +385,16 @@ npm run seed       # run migrations, then insert demo data (idempotent)
   connection is shared by all users in the tenant; `configured_by_user_id`
   records the last successful configurer for audit only. The API token is stored
   only as an AES-256-GCM encrypted, versioned value.
+- `jira_ticket_provenance(id, tenant_id, created_by_user_id, jira_connection_id, jira_site_url, jira_project_id, jira_project_key, jira_issue_id, jira_issue_key, created_at)` —
+  local provenance for Jira issues created through `POST /api/tickets` (Milestone
+  8). It stores only stable identifiers and an audit trail — never the ticket
+  title, description, credentials, or any raw Jira response, since Jira remains
+  the source of truth for mutable issue contents. Composite foreign keys into
+  `users(tenant_id, id)` and `jira_connections(tenant_id, id)` keep every row
+  tenant-safe (the latter backed by a `UNIQUE (tenant_id, id)` index the migration
+  adds), and `UNIQUE (tenant_id, jira_site_url, jira_issue_id)` prevents recording
+  the same issue twice. `jira_site_url` is a snapshot so the row keeps identifying
+  the issue's site even after the connection is replaced.
 
 All tables are SQLite `STRICT` tables. Repositories enforce tenant scope: every
 normal user query requires the owning `tenantId`, so a user can never be read
@@ -698,6 +778,126 @@ Expected outcomes:
 Throughout, confirm the plaintext token never appears in stdout, logs, API
 responses, the SQLite `encrypted_token` field, generated files, or `git status`.
 
+## Ticket creation (Milestone 8)
+
+An authenticated user creates a Jira Cloud issue of the fixed **`Task`** type in a
+project, against the tenant's shared connection. This is the first ticket-creation
+flow; it is backend only.
+
+| Method & path        | Auth required | Purpose                                                       |
+| -------------------- | ------------- | ------------------------------------------------------------- |
+| `POST /api/tickets`  | yes (cookie)  | Create a fixed-`Task` Jira issue and record local provenance. |
+
+The response includes `Cache-Control: no-store`. The request body accepts only
+the three domain fields; `tenantId` and the creating `userId` are derived from the
+session, and any client-supplied `tenantId`, `userId`, `connectionId`, `siteUrl`,
+`issueType`, or ownership field is ignored.
+
+Request body:
+
+```json
+{
+  "projectKey": "ABC",
+  "title": "NHI finding: leaked service-account key",
+  "description": "A short description.\nInternal line breaks are preserved."
+}
+```
+
+Success (HTTP 201) returns only the Jira issue id and key:
+
+```json
+{ "issueId": "10500", "issueKey": "ABC-42" }
+```
+
+`projectKey` is trimmed, uppercased, and must match a conservative Jira
+project-key syntax; `title` (≤ 255 characters) and `description` (≤ 5000
+characters) must be non-empty after trimming, and the description's internal line
+breaks are preserved. The issue type is always the project's non-subtask `Task`
+type, never chosen by the request. No endpoint stores or returns the ticket title
+or description after creation — Jira is the source of truth — and no response ever
+includes credentials or raw Jira content.
+
+### Safe error behavior
+
+| Condition                                                | Status | Code                        |
+| -------------------------------------------------------- | ------ | --------------------------- |
+| Invalid request input                                    | 400    | `invalid_request`           |
+| Missing application session                              | 401    | `unauthenticated`           |
+| Tenant has no Jira connection                            | 409    | `jira_not_connected`        |
+| Project inaccessible to the tenant connection            | 422    | `jira_project_inaccessible` |
+| Project does not support the fixed `Task` issue type     | 422    | `jira_task_unsupported`       |
+| Stored Jira credentials rejected                         | 502    | `jira_credentials_rejected` |
+| Jira unreachable / invalid response / upstream error     | 502    | `jira_unreachable`          |
+| Jira request timed out                                   | 504    | `jira_timeout`              |
+| Encryption key absent or stored credential undecryptable | 503    | `jira_not_configured`       |
+| Jira created the issue but local provenance failed       | 500    | `internal_error`            |
+
+Unlike the connect-time endpoint (where rejected credentials return 422), a
+credential rejection during ticket creation maps to 502: the connection was
+verified at connect time, so a later rejection is treated as an upstream failure.
+It returns its own `jira_credentials_rejected` ("The stored Jira credentials were
+rejected. Reconnect Jira and try again.") so the caller knows to reconnect,
+distinct from the generic `jira_unreachable` used for a network error, malformed or
+rate-limited response, or 5xx.
+
+The provenance row is written **only after** Jira confirms a successful creation.
+Jira creation and local persistence are sequential and not atomic, so not every
+issue Jira creates is guaranteed a local provenance row:
+
+- If Jira confirms the creation but the provenance insert fails, the response is
+  HTTP 500 and the already-created Jira issue remains untracked locally.
+- If Jira may have created the issue but the application times out or loses the
+  response before reading it, the application never learns the issue id/key,
+  records no provenance, and returns HTTP 504 even though the issue may exist.
+
+There is no idempotency key, durable operation tracking, safe retry,
+reconciliation, compensating deletion, or worker/queue; Jira remains the source of
+truth, and an immediate retry after a timeout may create a duplicate issue. This is
+an approved POC tradeoff — see [docs/assumptions.md](docs/assumptions.md).
+
+### Manual ticket-creation validation
+
+These steps require a real Jira Cloud site, account email, an **unscoped** API
+token, and a project the account can create `Task` issues in. Connect first via
+`POST /api/jira/connection` (see [Jira connection](#jira-connection-milestone-5)),
+then:
+
+```bash
+# Log in as an Acme user and connect Jira (see the Jira connection section), then
+# create a ticket. tenant and creator come only from the session cookie.
+curl -i -b alice.cookies -X POST http://localhost:3001/api/tickets \
+  -H 'Content-Type: application/json' \
+  -d '{"projectKey":"ABC","title":"Leaked service-account key","description":"Found a leaked key.\nRotate immediately."}'
+
+# Client-supplied ownership fields are ignored: the row is still owned by the
+# session tenant/user and the session connection's site.
+curl -i -b alice.cookies -X POST http://localhost:3001/api/tickets \
+  -H 'Content-Type: application/json' \
+  -d '{"projectKey":"ABC","title":"t","description":"d","tenantId":"tenant-globex","userId":"user-globex-alice","siteUrl":"https://evil.atlassian.net","issueType":"Bug"}'
+
+# No connection -> 409; invalid input -> 400; unknown/inaccessible project -> 422.
+curl -i -b globex.cookies -X POST http://localhost:3001/api/tickets \
+  -H 'Content-Type: application/json' \
+  -d '{"projectKey":"ABC","title":"t","description":"d"}'
+```
+
+What to confirm:
+
+- **Happy path** → HTTP 201 with `{ issueId, issueKey }`, and the issue appears in
+  Jira as a `Task`.
+- **Ownership comes only from the session** → the stored provenance row records the
+  session tenant, the session user as creator, and the session connection's site,
+  never the spoofed values.
+- **No connection** → HTTP 409 `jira_not_connected` with no Jira call.
+- **Provenance stores no contents** → the row holds only identifiers; the title and
+  description never appear in the database, logs, or responses.
+
+```bash
+# Provenance rows hold identifiers only — no title, description, or token.
+sqlite3 apps/api/data/app.db \
+  'SELECT tenant_id, created_by_user_id, jira_site_url, jira_project_key, jira_issue_key FROM jira_ticket_provenance;'
+```
+
 ## Jira connection UI (Milestone 6)
 
 The authenticated application shell now includes a Jira connection panel
@@ -986,8 +1186,8 @@ same-origin `nhi_session` cookie is sent automatically.
 │   │   │   ├── server.ts    # process startup, db init, listening
 │   │   │   ├── config/      # database path, env loading, Jira key resolution
 │   │   │   ├── database/    # connection factory, migrator, lifecycle, seed
-│   │   │   ├── jira/        # Jira connection routes, verifier, token cipher
-│   │   │   └── repositories/# tenant-scoped repositories (users, sessions, Jira)
+│   │   │   ├── jira/        # Jira connection + ticket routes, client, integration & ticket services, token cipher
+│   │   │   └── repositories/# tenant-scoped repositories (users, sessions, Jira connection, ticket provenance)
 │   │   └── test/            # backend Vitest tests
 │   └── web/                 # React + Vite frontend
 │       ├── src/

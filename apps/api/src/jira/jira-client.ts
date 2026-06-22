@@ -57,6 +57,28 @@ export type ProjectValidationResult =
     };
 
 /**
+ * Sanitized outcome of creating a Jira issue. On success it carries only the
+ * non-empty Jira issue id and key. A 401 maps to `credentials_rejected`; every
+ * other rejection (a Jira-rejected creation, a malformed or invalid response, a
+ * redirect, rate limiting, or a 5xx) collapses into `unavailable`, and a stalled
+ * request maps to `timeout`. No raw Jira content ever escapes.
+ */
+export type IssueCreationResult =
+  | { ok: true; issueId: string; issueKey: string }
+  | { ok: false; reason: 'credentials_rejected' | 'timeout' | 'unavailable' };
+
+export interface CreateIssueInput {
+  /** Canonical Jira project id resolved by project validation. */
+  projectId: string;
+  /** Non-subtask `Task` issue-type id resolved by project validation. */
+  issueTypeId: string;
+  /** Plain-text issue summary (the validated ticket title). */
+  summary: string;
+  /** Plain-text description; converted to a minimal ADF document. */
+  description: string;
+}
+
+/**
  * Sanitized low-level outcome of a single Jira request, with the body parsed on
  * success. The failure reasons are deliberately HTTP-shaped (`unauthorized` vs
  * `forbidden` kept distinct) so each public operation can apply its own contract:
@@ -136,6 +158,47 @@ function findTaskIssueTypeId(issueTypes: JiraIssueType[]): string | null {
     (issueType) => issueType.subtask === false && issueType.name === REQUIRED_ISSUE_TYPE_NAME,
   );
   return match ? match.id : null;
+}
+
+/** Extract a non-empty created-issue id and key, validating the shape at runtime. */
+function extractCreatedIssue(body: unknown): { id: string; key: string } | null {
+  if (typeof body !== 'object' || body === null) {
+    return null;
+  }
+  const record = body as Record<string, unknown>;
+  if (!isNonEmptyString(record.id) || !isNonEmptyString(record.key)) {
+    return null;
+  }
+  return { id: record.id, key: record.key };
+}
+
+interface AdfNode {
+  type: string;
+  text?: string;
+  content?: AdfNode[];
+  version?: number;
+}
+
+/**
+ * Convert plain text into a minimal valid Atlassian Document Format document. The
+ * text is rendered as a single paragraph in which internal line breaks are
+ * preserved deterministically with ADF `hardBreak` nodes: each line becomes a
+ * non-empty `text` node (ADF forbids empty text nodes) and consecutive lines are
+ * separated by a `hardBreak`. This intentionally supports no HTML, Markdown,
+ * rich-text features, mentions, links, or custom fields.
+ */
+function descriptionToAdf(description: string): AdfNode {
+  const lines = description.replace(/\r\n?/g, '\n').split('\n');
+  const content: AdfNode[] = [];
+  lines.forEach((line, index) => {
+    if (index > 0) {
+      content.push({ type: 'hardBreak' });
+    }
+    if (line.length > 0) {
+      content.push({ type: 'text', text: line });
+    }
+  });
+  return { type: 'doc', version: 1, content: [{ type: 'paragraph', content }] };
 }
 
 export class JiraClient {
@@ -220,27 +283,80 @@ export class JiraClient {
   }
 
   /**
-   * Perform a single authenticated GET against the validated origin and parse a
-   * JSON body. A single try/finally keeps the timeout armed across the request,
-   * the status check, and the full body read, so a stall while reading the body
-   * maps to `timeout` rather than `unavailable`. Redirects (status 3xx, or an
-   * opaque redirect with status 0) and every other non-2xx status are mapped to
-   * a sanitized reason; no raw response detail escapes.
+   * Create a Jira issue (`POST /rest/api/3/issue`) of the fixed, non-subtask
+   * `Task` type. The caller supplies the validated canonical project id and the
+   * resolved Task issue-type id; the issue type is never chosen by request input.
+   * The description is converted to a minimal ADF document. Returns the non-empty
+   * Jira issue id and key, or a sanitized failure.
    */
-  private async request(path: string): Promise<RequestOutcome> {
+  async createIssue(input: CreateIssueInput): Promise<IssueCreationResult> {
+    const body = {
+      fields: {
+        project: { id: input.projectId },
+        issuetype: { id: input.issueTypeId },
+        summary: input.summary,
+        description: descriptionToAdf(input.description),
+      },
+    };
+    const outcome = await this.request('/rest/api/3/issue', { method: 'POST', body });
+    if (!outcome.ok) {
+      switch (outcome.reason) {
+        case 'unauthorized':
+          return { ok: false, reason: 'credentials_rejected' };
+        // A forbidden, not-found, redirect, rate-limit, or 5xx response all mean
+        // Jira did not create the issue; none is a credential problem here.
+        case 'forbidden':
+        case 'not_found':
+        case 'unavailable':
+          return { ok: false, reason: 'unavailable' };
+        case 'timeout':
+          return { ok: false, reason: 'timeout' };
+      }
+    }
+
+    const created = extractCreatedIssue(outcome.body);
+    if (created === null) {
+      return { ok: false, reason: 'unavailable' };
+    }
+    return { ok: true, issueId: created.id, issueKey: created.key };
+  }
+
+  /**
+   * Perform a single authenticated request against the validated origin and parse
+   * a JSON body. GET is the default; passing a body sends a JSON POST. A single
+   * try/finally keeps the timeout armed across the request, the status check, and
+   * the full body read, so a stall while reading the body maps to `timeout`
+   * rather than `unavailable`. Redirects (status 3xx, or an opaque redirect with
+   * status 0) and every other non-2xx status are mapped to a sanitized reason; no
+   * raw response detail escapes.
+   */
+  private async request(
+    path: string,
+    options: { method?: string; body?: unknown } = {},
+  ): Promise<RequestOutcome> {
     const url = `${this.origin}${path}`;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
 
+    const headers: Record<string, string> = {
+      Authorization: this.authorization,
+      Accept: 'application/json',
+    };
+    const init: RequestInit = {
+      method: options.method ?? 'GET',
+      headers,
+      redirect: 'manual',
+      signal: controller.signal,
+    };
+    if (options.body !== undefined) {
+      headers['Content-Type'] = 'application/json';
+      init.body = JSON.stringify(options.body);
+    }
+
     try {
       let response: Response;
       try {
-        response = await this.fetch(url, {
-          method: 'GET',
-          headers: { Authorization: this.authorization, Accept: 'application/json' },
-          redirect: 'manual',
-          signal: controller.signal,
-        });
+        response = await this.fetch(url, init);
       } catch (error) {
         return {
           ok: false,

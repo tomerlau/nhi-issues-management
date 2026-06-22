@@ -1,7 +1,7 @@
 # Architecture
 
 This document describes the architecture that currently exists through
-Milestone 7. It intentionally avoids designing later domain layers in detail.
+Milestone 8. It intentionally avoids designing later domain layers in detail.
 
 ## Monorepo structure
 
@@ -21,8 +21,9 @@ because there is no genuine cross-application code to share.
 The frontend and backend are separate applications with separate dependency
 trees, build outputs, and lifecycles. They communicate only over HTTP. The
 frontend holds no backend secrets or configuration; it knows only relative `/api`
-endpoints — the authentication endpoints `/api/auth/*` and the Jira connection
-endpoints `/api/jira/connection`. The backend
+endpoints — the authentication endpoints `/api/auth/*`, the Jira connection
+endpoints `/api/jira/connection`, and (as of Milestone 8) the ticket-creation
+endpoint `/api/tickets`. The backend
 health endpoint `/api/health` remains available separately for liveness checks
 and is not part of the frontend authentication flow.
 
@@ -579,3 +580,130 @@ avoiding an ORM remains keeping SQL explicit, auditable, and visibly
 tenant-scoped: an ORM or a generic base repository would add abstraction and
 indirection with no payoff at this scope, and a generic layer risks hiding the
 very tenant-scoping the design depends on.
+
+## Ticket creation domain service (Milestone 8)
+
+Milestone 8 adds the first ticket-creation flow: an authenticated user creates a
+Jira issue (of the fixed `Task` type) in a project, and the application records
+local provenance for the created issue. It builds directly on the Milestone 7
+integration layer and adds one REST endpoint, one domain service, and one
+provenance table. It is backend only.
+
+### Request boundary and ownership
+
+`/api/tickets` (`ticket-routes.ts`) sits behind `requireAuth` and sets
+`Cache-Control: no-store` on every response. `POST /api/tickets` accepts only
+three domain fields — `projectKey`, `title`, and `description` — and derives
+`tenantId` and the creating `userId` solely from the session. Any client-supplied
+`tenantId`, `userId`, `connectionId`, `siteUrl`, `issueType`, or ownership field
+in the body is ignored: the validator reads only the three domain fields, so no
+request input can redirect the ticket to another tenant, connection, site, or
+issue type. The body is fully validated before any Jira network request:
+`projectKey` is trimmed, uppercased, and checked against a conservative Jira
+project-key syntax and length bound; `title` and `description` are trimmed,
+required to be non-empty, and bounded in length, with `description` preserving
+meaningful internal line breaks. No validation framework is used.
+
+### Same-connection validate-then-create flow
+
+`jira-integration-service.ts` gains `createTicket(context, input)`. It loads the
+tenant's shared connection **exactly once** via
+`JiraConnectionRepository.findByTenant(context.tenantId)`, re-validates the
+stored site URL, and decrypts the token just-in-time bound to the stored tenant
+only — identical to the project-validation path. It then constructs a **single**
+short-lived `JiraClient` and uses that one client for **both** project validation
+and issue creation. This is deliberate: it does not call the public
+`validateProject` and then independently reload the connection for creation, so a
+concurrent connection replacement can never make validation and creation run
+against different Jira connections. On success it returns the sanitized Jira issue
+id and key together with the exact connection and project metadata used
+(connection id, site URL, project id, canonical project key), so the caller
+records provenance consistent with the connection the issue was actually created
+against. Every failure mirrors the project-validation outcomes and never carries
+the plaintext token or raw Jira content.
+
+`jira-client.ts` gains `createIssue(input)`, which performs
+`POST /rest/api/3/issue` with `{ fields: { project: { id }, issuetype: { id },
+summary, description } }`. The project id and Task issue-type id come only from
+the prior validation result, never from request input; the description is
+converted to a minimal ADF document that preserves internal line breaks as
+deterministic `hardBreak` nodes (ADF forbids empty text nodes, so empty lines emit
+only a break). It runtime-validates the response and returns only a non-empty
+issue id and key, mapping a 401 to `credentials_rejected`, a stall to `timeout`,
+and every other rejection (a Jira-rejected creation, redirect, 429, 5xx, network
+error, or malformed response) to `unavailable`. No raw Jira content escapes. The
+client remains Jira-specific and is not a general-purpose SDK.
+
+### Provenance is recorded only after Jira confirms creation
+
+`ticket-service.ts` is the domain service composing the integration layer with
+`TicketProvenanceRepository`. It delegates to `createTicket`; on any non-`created`
+outcome it passes the sanitized result straight through. Only after Jira returns a
+validated successful creation does it insert one provenance row, using the exact
+connection and project metadata the integration layer reported. No pending or
+placeholder row is ever written before Jira is called.
+
+`jira_ticket_provenance` (migration `006_jira_ticket_provenance.sql`) is a focused
+`STRICT` table storing only stable identifiers and an audit trail: a provenance
+id, the owning `tenant_id`, the creating `created_by_user_id`, the
+`jira_connection_id`, a `jira_site_url` snapshot, the `jira_project_id` /
+`jira_project_key`, the `jira_issue_id` / `jira_issue_key`, and a local
+`created_at`. It deliberately stores **no** ticket title, description, credential,
+or raw Jira response — Jira remains the source of truth for mutable issue
+contents, and the application keeps only the minimal pointer needed to identify
+the created issue. Tenant safety is enforced by composite foreign keys into
+`users(tenant_id, id)` and `jira_connections(tenant_id, id)` (the latter backed by
+a new `UNIQUE (tenant_id, id)` index on `jira_connections` that the migration adds
+so the composite reference resolves). A `UNIQUE (tenant_id, jira_site_url,
+jira_issue_id)` constraint prevents recording the same issue twice for a tenant
+and site. The `jira_site_url` is stored as a snapshot rather than only referencing
+the connection, so the row keeps identifying which site the issue lives on even
+after the tenant replaces its connection.
+
+### Sequential creation is not a distributed transaction (approved POC tradeoff)
+
+Jira issue creation and local provenance persistence are sequential and are not
+atomic, so the application cannot guarantee that every issue Jira creates also has
+a local provenance row. Two distinct cases leave an issue untracked:
+
+- **Confirmed creation, failed provenance.** Jira confirms the creation and
+  returns the issue id and key, but the subsequent provenance insert fails (for
+  example, the unique constraint rejects a duplicate). The domain service returns a
+  distinct `persistence_failed` outcome and the route maps it to an opaque HTTP
+  500; the already-created Jira issue remains untracked locally.
+- **Unconfirmed creation after a timeout.** Jira may actually create the issue, but
+  the application times out or loses the response while waiting for it or reading
+  the response body. The application never learns the resulting issue id or key, so
+  it records no provenance and returns a timeout (`jira_timeout`, HTTP 504) even
+  though the issue may in fact exist in Jira.
+
+There is deliberately no idempotency key, durable operation tracking, safe-retry
+mechanism, reconciliation worker, compensating deletion, or queue/worker state
+machine. This is an explicitly approved POC simplification documented in
+`docs/assumptions.md`; the production alternative (an idempotent, durable creation
+workflow with operation tracking, safe retries, and reconciliation/recovery) is
+noted there. Jira remains the source of truth for which issues exist. Because the
+flow is not idempotent, an immediate retry after an unconfirmed timeout may create
+a duplicate Jira issue.
+
+### Outcome-to-status mapping
+
+The route maps the domain outcomes to stable, sanitized HTTP responses: `created`
+→ 201 `{ issueId, issueKey }`; `not_connected` → 409 `jira_not_connected`;
+`project_inaccessible` → 422 `jira_project_inaccessible`; `task_unsupported` → 422
+`jira_task_unsupported`; `credentials_rejected` → 502 `jira_credentials_rejected`
+("The stored Jira credentials were rejected. Reconnect Jira and try again.");
+`unavailable` → 502 `jira_unreachable`; `timeout` → 504 `jira_timeout`;
+`configuration_error` → 503
+`jira_not_configured` (the encryption key is absent or the stored credential
+cannot be decrypted); and `persistence_failed` → 500 `internal_error`. An invalid
+body returns 400 `invalid_request` before any Jira call, and an unauthenticated
+request returns 401 `unauthenticated`. The terminal error handlers in `app.ts` now
+also apply `Cache-Control: no-store` to `/api/tickets`, so error responses on this
+credential-bearing route are never cached. Notably, for ticket creation a
+credential rejection maps to 502 (the connection was previously verified, so a
+later rejection is treated as an upstream failure) rather than the 422 used by the
+M5 connection endpoint. The two 502 cases are deliberately distinguished: a
+rejection of the stored credentials returns `jira_credentials_rejected` so the
+caller knows to reconnect Jira, while a network error, malformed or rate-limited
+response, or 5xx returns the generic `jira_unreachable`.
