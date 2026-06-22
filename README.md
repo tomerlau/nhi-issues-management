@@ -546,6 +546,82 @@ sqlite3 apps/api/data/app.db \
 The plaintext token must not appear in API logs, API responses, frontend state,
 generated files, the database token field, or `git status`.
 
+### Manual Jira integration-layer validation (Milestone 7)
+
+The Milestone 7 integration layer (`JiraIntegrationService`) is internal: it has
+no committed HTTP route or product surface yet. Validate it with a **temporary**
+local script that you delete afterwards — do not commit any throwaway CLI, route,
+or product surface.
+
+First reproduce the v1 → v2 migration. Starting from a database created before
+Milestone 7 (one that still holds a Milestone 5 connection encrypted with the v1
+`v1.` prefix), apply migrations and confirm migration 005 disconnects every
+tenant:
+
+```bash
+# Inspect existing connections before migrating (token starts with v1.).
+sqlite3 apps/api/data/app.db \
+  'SELECT tenant_id, substr(encrypted_token,1,3) FROM jira_connections;'
+
+npm run migrate   # applies 005_jira_connection_v2_credentials.sql
+
+# After migration the table is empty: every tenant is disconnected.
+sqlite3 apps/api/data/app.db 'SELECT count(*) FROM jira_connections;'   # 0
+```
+
+Reconnect through the Milestone 5 endpoint (see the section above) and confirm
+the freshly stored token now carries the `v2.` prefix:
+
+```bash
+sqlite3 apps/api/data/app.db \
+  'SELECT tenant_id, substr(encrypted_token,1,3) FROM jira_connections;'  # v2.
+```
+
+Then exercise the integration service directly with a temporary script. Create
+`apps/api/tmp-validate.mjs` and delete it when finished (it is a throwaway and
+must never be committed):
+
+```js
+// TEMPORARY validation script — delete after use, do not commit.
+import { openDatabase } from './dist/database/connection.js';
+import { JiraIntegrationService } from './dist/jira/jira-integration-service.js';
+
+const db = openDatabase(process.env.NHI_DATABASE_PATH ?? 'data/app.db');
+const encryptionKey = Buffer.from(process.env.JIRA_CREDENTIAL_ENCRYPTION_KEY, 'base64');
+const service = new JiraIntegrationService({ db, encryptionKey, fetch });
+
+// Replace with real tenant/user ids from your seeded data.
+const acmeAlice = { userId: 'user-acme-alice', tenantId: 'tenant-acme' };
+const acmeBob = { userId: 'user-acme-bob', tenantId: 'tenant-acme' };
+const globexAlice = { userId: 'user-globex-alice', tenantId: 'tenant-globex' };
+
+console.log('accessible Task project', await service.validateProject(acmeAlice, 'YOUR_PROJECT_KEY'));
+console.log('same tenant, other user', await service.validateProject(acmeBob, 'YOUR_PROJECT_KEY'));
+console.log('nonexistent / inaccessible', await service.validateProject(acmeAlice, 'NOPE'));
+console.log('project without a Task type', await service.validateProject(acmeAlice, 'PROJECT_WITHOUT_TASK'));
+console.log('other tenant is isolated', await service.validateProject(globexAlice, 'YOUR_PROJECT_KEY'));
+```
+
+```bash
+npm run build --workspace apps/api
+export JIRA_CREDENTIAL_ENCRYPTION_KEY="<the key used when connecting>"
+node apps/api/tmp-validate.mjs
+rm apps/api/tmp-validate.mjs   # remove the throwaway script
+```
+
+Expected outcomes:
+
+- **Accessible project supporting Task** → `{ status: 'valid', projectId, projectKey, taskIssueTypeId }`.
+- **Same-tenant second user** (Bob) → identical `valid` result; the connection is
+  shared per tenant, decrypted by `tenantId` only.
+- **Nonexistent / inaccessible project** → `{ status: 'project_inaccessible' }`.
+- **Project with no non-subtask `Task` type** → `{ status: 'task_unsupported' }`.
+- **Another tenant** (Globex, no connection) → `{ status: 'not_connected' }` with
+  no outbound request.
+
+Throughout, confirm the plaintext token never appears in stdout, logs, API
+responses, the SQLite `encrypted_token` field, generated files, or `git status`.
+
 ## Manual validation
 
 These commands exercise the full authentication flow locally. They assume the
