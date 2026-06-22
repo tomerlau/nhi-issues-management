@@ -22,7 +22,59 @@ authenticated frontend application shell: initial session restoration, login and
 logout, authenticated and unauthenticated states, loading states, and clear
 authentication and network errors.
 
-## Current milestone scope (Milestone 5: Jira API-token connection)
+## Current milestone scope (Milestone 7: Jira integration layer)
+
+Backend only. Milestone 7 provides one secure abstraction for authenticated Jira
+Cloud API access using the authenticated tenant's shared connection.
+
+Implemented:
+
+- **A central Jira client** (`apps/api/src/jira/jira-client.ts`) that owns all
+  Jira HTTP behavior: it targets only the already-validated direct
+  `https://<site>.atlassian.net` origin, builds Basic authentication in memory
+  (never persisting or logging the plaintext token or Authorization header), uses
+  an injected fetch transport, applies a timeout that stays armed through the full
+  response-body read, uses `redirect: 'manual'` and never follows redirects,
+  safely percent-encodes dynamic project identifiers, validates response shapes at
+  runtime, and returns only sanitized outcomes (never raw Jira bodies, network
+  errors, redirect locations, stack traces, or credentials). It is intentionally
+  not a general-purpose Atlassian SDK.
+- **The M5 credential verifier reuses the client** instead of maintaining a second
+  HTTP implementation, preserving its existing outcome contract
+  (`accountId`/`credentials_rejected`/`timeout`/`unavailable`) and all M5
+  connection endpoint behavior.
+- **A tenant-scoped integration service**
+  (`apps/api/src/jira/jira-integration-service.ts`) that receives an
+  `AuthContext`, loads the connection only via
+  `JiraConnectionRepository.findByTenant(context.tenantId)`, re-validates the
+  stored site URL before any network call, decrypts the token just-in-time bound
+  to the stored tenant only, creates a short-lived client, and validates a Jira
+  project. Cross-tenant access is impossible even when another connection id, Jira
+  key, site URL, or configurer id is known.
+- **Project validation** via `GET /rest/api/3/project/{idOrKey}?expand=issueTypes`
+  returning the project id, canonical key, and the id of the **fixed**, non-subtask
+  issue type named exactly `Task`. Distinct outcomes cover a valid project, not
+  connected, an inaccessible project, an unsupported `Task` type, rejected
+  credentials, timeout, unavailable, and an internal configuration failure. A
+  subtask named `Task` is not accepted.
+- **Tenant-only v2 credential encryption.** The token AAD now binds only the
+  credential type, the credential format version, and `tenantId`;
+  `configured_by_user_id` is audit metadata only and no longer participates in
+  encryption or decryption. Stored tokens use the `v2.` prefix.
+- **Migration 005** (`005_jira_connection_v2_credentials.sql`), a forward-only
+  `DELETE` of all `jira_connections` rows. Existing v1 connections cannot be
+  decrypted under the tenant-only context, so affected tenants are disconnected
+  and must reconnect; their next connection is stored as v2.
+
+Explicitly **not** implemented in Milestone 7: any frontend or Jira connection UI;
+ticket creation; local ticket provenance; recent-tickets; a REST endpoint for
+project validation; external application API-key authentication; Jira project
+discovery or search; configurable issue types; custom Jira fields;
+OAuth/3LO/refresh tokens/rotation; Jira Server or Data Center support; and any
+general-purpose Atlassian SDK. The project currently has no ticket-creation flow,
+recent-ticket flow, project-discovery UI, or external Jira REST endpoint.
+
+## Earlier milestone scope (Milestone 5: Jira API-token connection)
 
 Backend only. An authenticated application user connects a Jira Cloud account
 for their tenant. The connection is a tenant-wide organization integration
@@ -486,7 +538,7 @@ Confirm exactly one row per tenant, audit metadata, and that no token leaks:
 
 ```bash
 # One row per tenant; configured_by_user_id is the last successful configurer;
-# the stored token starts with the version prefix (v1.) and is never the plaintext.
+# the stored token starts with the version prefix (v2.) and is never the plaintext.
 sqlite3 apps/api/data/app.db \
   'SELECT tenant_id, configured_by_user_id, site_url, email, substr(encrypted_token,1,3) FROM jira_connections;'
 ```
