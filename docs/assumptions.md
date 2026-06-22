@@ -1,7 +1,7 @@
 # Project Assumptions
 
 This document records the assumptions and tradeoffs relevant to the
-functionality implemented through the current milestone (Milestone 5). It grows
+functionality implemented through the current milestone (Milestone 7). It grows
 cumulatively as later milestones add functionality.
 
 ## Scope
@@ -14,6 +14,10 @@ cumulatively as later milestones add functionality.
 - Milestone 4 adds the frontend authenticated application shell on top of the
   Milestone 3 backend, without changing the backend authentication contract.
 - Milestone 5 adds a backend-only Jira API-token connection.
+- Milestone 7 adds a backend-only Jira integration layer: one central Jira
+  client and a tenant-scoped integration service that validates a Jira project
+  against the authenticated tenant's shared connection, plus a move from v1 to
+  tenant-only v2 credential encryption.
 - The optional blog digest is not part of the current implementation.
 
 ## Frontend
@@ -212,7 +216,59 @@ cumulatively as later milestones add functionality.
   is missing, the Jira endpoints return HTTP 503 `jira_not_configured` while
   health, login, logout, and session restoration continue to work. No fallback
   or development key is ever generated.
-- **Deferred:** any frontend or Jira connection UI; OAuth 2.0 / 3LO and token
-  refresh; a reusable Jira API client (Milestone 7); Jira project discovery or
-  validation; ticket creation; a disconnect endpoint; and production KMS
-  integration or key rotation.
+- **Deferred (from Milestone 5):** any frontend or Jira connection UI; OAuth 2.0
+  / 3LO and token refresh; ticket creation; a disconnect endpoint; and production
+  KMS integration or key rotation. The reusable Jira client and project
+  validation, originally deferred here, are implemented in Milestone 7 (below);
+  Jira project discovery/search remains out of scope.
+
+## Jira integration layer (Milestone 7)
+
+- **The Jira connection belongs to the tenant, not the configuring user.**
+  Credential encryption moved from the v1 context `(tenantId,
+  configuredByUserId)` to a tenant-only v2 context binding the credential type,
+  the credential format version, and `tenantId`. Any user in a tenant uses the
+  same shared connection regardless of who configured it.
+  - `configured_by_user_id` remains **audit metadata only** and no longer
+    participates in encryption or decryption.
+  - **Production alternative:** a managed key service (e.g. AWS KMS) with
+    envelope encryption and rotation, and tenant-administrator-scoped management
+    of the shared integration.
+  - **Tradeoff:** tenant-bound AAD makes the shared connection usable by every
+    tenant user while still making a ciphertext copied to another tenant
+    undecryptable.
+- **Existing v1 connections are deleted, not migrated.** Migration 005 is a
+  forward-only `DELETE` of all `jira_connections` rows, because v1 ciphertext is
+  bound to the configuring user and cannot be decrypted under the tenant-only v2
+  context. Affected tenants are disconnected and must reconnect; the next
+  connection is stored as v2. This is approved for the local POC — there is no
+  backward compatibility with v1 ciphertext and deleting existing local Jira
+  connection data is acceptable. No undecryptable row is left appearing
+  connected.
+- **One central Jira client owns all Jira HTTP behavior.** It targets only the
+  already-validated direct `https://<site>.atlassian.net` origin, builds Basic
+  authentication in memory (never persisting or logging the plaintext token or
+  Authorization header), never follows redirects, applies a timeout that covers
+  the full response-body read, validates response shapes at runtime, and returns
+  only sanitized outcomes. The M5 credential verifier now reuses this client
+  rather than maintaining a second HTTP implementation. It is intentionally not a
+  general-purpose Atlassian SDK.
+- **Project validation uses Jira Cloud REST API v3.**
+  `GET /rest/api/3/project/{projectIdOrKey}?expand=issueTypes` confirms the
+  project exists and is accessible to the tenant's shared connection, returns the
+  project id and canonical key, and resolves the id of a non-subtask issue type
+  named exactly `Task`. The issue type is **fixed** (`Task`); a subtask named
+  `Task` is not accepted. A missing or inaccessible project is distinct from a
+  project that exists but does not support `Task`.
+- **Access is strictly tenant-scoped.** The integration service loads the
+  connection only via `findByTenant(context.tenantId)` and never accepts a
+  tenantId, userId, connectionId, site URL, email, or ownership value from
+  request data, so cross-tenant access is impossible. The stored site URL is
+  re-validated before any network call (no request on an invalid URL), and the
+  token is decrypted just-in-time using the stored tenant only. Decryption
+  failures are collapsed into one sanitized configuration failure.
+- **Deferred:** ticket creation; local ticket provenance; recent-tickets;
+  any REST endpoint for project validation; external application API-key
+  authentication; Jira project discovery or search; configurable issue types;
+  custom fields; OAuth/3LO/refresh tokens/rotation; and Jira Server / Data
+  Center support.

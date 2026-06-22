@@ -1,0 +1,21 @@
+-- Milestone 7 (migration 005): move Jira credential encryption from the v1
+-- credential context (tenantId, configuredByUserId) to a v2 tenant-only context
+-- (credential type, credential format version, tenantId).
+--
+-- The Jira connection belongs to the tenant, not to the user who configured it,
+-- so the encryption AAD must no longer bind the ciphertext to
+-- configured_by_user_id. configured_by_user_id remains on the row as audit
+-- metadata only and no longer participates in encryption or decryption.
+--
+-- Existing rows hold v1 ciphertext, which the v2 cipher cannot decrypt. Rather
+-- than leave undecryptable rows that still appear connected, this forward-only
+-- migration deletes every existing Jira connection. Affected tenants become
+-- disconnected and must reconnect; their next connection is stored as v2. This
+-- is approved for the local POC (no backward compatibility with v1 ciphertext).
+--
+-- The jira_connections schema (columns, the tenant-wide UNIQUE (tenant_id)
+-- constraint, and the composite foreign key) is unchanged. Like every migration
+-- it runs inside the migrator's transaction and is recorded once in
+-- schema_migrations, so a re-run is skipped and never re-deletes.
+
+DELETE FROM jira_connections;

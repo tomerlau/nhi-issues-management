@@ -50,6 +50,7 @@ describe('migration runner', () => {
       '002_authentication.sql',
       '003_jira_connections.sql',
       '004_jira_connection_tenant_wide.sql',
+      '005_jira_connection_v2_credentials.sql',
     ]);
 
     const secondRun = runMigrations(db);
@@ -63,6 +64,7 @@ describe('migration runner', () => {
       '002_authentication.sql',
       '003_jira_connections.sql',
       '004_jira_connection_tenant_wide.sql',
+      '005_jira_connection_v2_credentials.sql',
     ]);
     db.close();
   });

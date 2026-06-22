@@ -13,7 +13,20 @@ const PRE_TENANT_WIDE = [
   '003_jira_connections.sql',
 ];
 
-const MIGRATIONS = [...PRE_TENANT_WIDE, '004_jira_connection_tenant_wide.sql'];
+const THROUGH_004 = [...PRE_TENANT_WIDE, '004_jira_connection_tenant_wide.sql'];
+const ALL = [...THROUGH_004, '005_jira_connection_v2_credentials.sql'];
+
+const JIRA_COLUMNS = [
+  'id',
+  'tenant_id',
+  'configured_by_user_id',
+  'site_url',
+  'email',
+  'account_id',
+  'encrypted_token',
+  'created_at',
+  'updated_at',
+];
 
 interface ColumnInfo {
   name: string;
@@ -34,6 +47,36 @@ function seedTenantAndUsers(db: ReturnType<typeof openDatabase>): void {
   `);
 }
 
+function insertTenantWideRow(
+  db: ReturnType<typeof openDatabase>,
+  row: {
+    id: string;
+    tenantId: string;
+    configuredByUserId: string;
+    siteUrl?: string;
+    email?: string;
+    accountId?: string;
+    encryptedToken?: string;
+  },
+): void {
+  db.prepare(
+    `INSERT INTO jira_connections
+       (id, tenant_id, configured_by_user_id, site_url, email, account_id,
+        encrypted_token, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    row.id,
+    row.tenantId,
+    row.configuredByUserId,
+    row.siteUrl ?? 'https://x.atlassian.net',
+    row.email ?? 'u1@example.com',
+    row.accountId ?? 'acc',
+    row.encryptedToken ?? 'enc',
+    'now',
+    'now',
+  );
+}
+
 describe('jira_connections migration', () => {
   let dir: string;
 
@@ -52,39 +95,26 @@ describe('jira_connections migration', () => {
   }
 
   it('applies on a fresh database and creates the tenant-wide jira_connections table', () => {
-    copyMigrations(MIGRATIONS);
+    copyMigrations(ALL);
     const db = openDatabase(':memory:');
-    expect(runMigrations(db, dir)).toEqual(MIGRATIONS);
+    expect(runMigrations(db, dir)).toEqual(ALL);
 
-    const columns = tableColumns(db, 'jira_connections').map((c) => c.name);
-    expect(columns).toEqual([
-      'id',
-      'tenant_id',
-      'configured_by_user_id',
-      'site_url',
-      'email',
-      'account_id',
-      'encrypted_token',
-      'created_at',
-      'updated_at',
-    ]);
+    expect(tableColumns(db, 'jira_connections').map((c) => c.name)).toEqual(JIRA_COLUMNS);
     db.close();
   });
 
   it('upgrades an existing per-user schema by applying only migration 004', () => {
-    // Start from the pre-correction schema (migrations 001..003 only).
     copyMigrations(PRE_TENANT_WIDE);
     const db = openDatabase(':memory:');
     expect(runMigrations(db, dir)).toEqual(PRE_TENANT_WIDE);
 
-    // Now make 004 available and re-run; only the new migration is applied.
     copyMigrations(['004_jira_connection_tenant_wide.sql']);
     expect(runMigrations(db, dir)).toEqual(['004_jira_connection_tenant_wide.sql']);
     db.close();
   });
 
   it('is idempotent: a second run applies nothing', () => {
-    copyMigrations(MIGRATIONS);
+    copyMigrations(ALL);
     const db = openDatabase(':memory:');
     runMigrations(db, dir);
     expect(runMigrations(db, dir)).toEqual([]);
@@ -92,47 +122,104 @@ describe('jira_connections migration', () => {
   });
 
   it('enforces one connection per tenant', () => {
-    copyMigrations(MIGRATIONS);
+    copyMigrations(ALL);
     const db = openDatabase(':memory:');
     runMigrations(db, dir);
     seedTenantAndUsers(db);
 
-    const insert = db.prepare(
-      `INSERT INTO jira_connections
-         (id, tenant_id, configured_by_user_id, site_url, email, account_id,
-          encrypted_token, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    );
-    insert.run('c1', 't1', 'u1', 'https://x.atlassian.net', 'u1@example.com', 'acc', 'enc', 'now', 'now');
-
+    insertTenantWideRow(db, { id: 'c1', tenantId: 't1', configuredByUserId: 'u1' });
     // A second connection for the same tenant (even by a different user) is rejected.
     expect(() =>
-      insert.run('c2', 't1', 'u2', 'https://y.atlassian.net', 'u2@example.com', 'acc', 'enc', 'now', 'now'),
+      insertTenantWideRow(db, { id: 'c2', tenantId: 't1', configuredByUserId: 'u2' }),
     ).toThrow();
     db.close();
   });
 
   it('rejects a connection whose (tenant_id, configured_by_user_id) does not match a user', () => {
-    copyMigrations(MIGRATIONS);
+    copyMigrations(ALL);
     const db = openDatabase(':memory:');
     runMigrations(db, dir);
     seedTenantAndUsers(db);
 
-    const insert = db.prepare(
-      `INSERT INTO jira_connections
-         (id, tenant_id, configured_by_user_id, site_url, email, account_id,
-          encrypted_token, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    );
     // user 'u1' belongs to tenant 't1', not 't2': composite FK must reject it.
     expect(() =>
-      insert.run('c1', 't2', 'u1', 'https://x.atlassian.net', 'u1@example.com', 'acc', 'enc', 'now', 'now'),
+      insertTenantWideRow(db, { id: 'c1', tenantId: 't2', configuredByUserId: 'u1' }),
     ).toThrow();
     db.close();
   });
 
-  describe('legacy per-user row migration', () => {
-    // Apply 001..003 (the per-user schema), insert legacy rows, then apply 004.
+  describe('migration 005 (v2 credentials)', () => {
+    it('deletes existing connections from a database upgraded through migration 004', () => {
+      // Reach the tenant-wide schema (001..004) and store connections as M5 would.
+      copyMigrations(THROUGH_004);
+      const db = openDatabase(':memory:');
+      expect(runMigrations(db, dir)).toEqual(THROUGH_004);
+      seedTenantAndUsers(db);
+      insertTenantWideRow(db, { id: 'c1', tenantId: 't1', configuredByUserId: 'u1' });
+      expect(db.prepare('SELECT COUNT(*) AS n FROM jira_connections').get()).toEqual({ n: 1 });
+
+      // Applying only migration 005 removes the v1-era rows; the tenant is disconnected.
+      copyMigrations(['005_jira_connection_v2_credentials.sql']);
+      expect(runMigrations(db, dir)).toEqual(['005_jira_connection_v2_credentials.sql']);
+      expect(db.prepare('SELECT COUNT(*) AS n FROM jira_connections').get()).toEqual({ n: 0 });
+      db.close();
+    });
+
+    it('keeps the schema and tenant-wide uniqueness intact', () => {
+      copyMigrations(ALL);
+      const db = openDatabase(':memory:');
+      runMigrations(db, dir);
+      seedTenantAndUsers(db);
+
+      expect(tableColumns(db, 'jira_connections').map((c) => c.name)).toEqual(JIRA_COLUMNS);
+
+      insertTenantWideRow(db, { id: 'c1', tenantId: 't1', configuredByUserId: 'u1' });
+      expect(() =>
+        insertTenantWideRow(db, { id: 'c2', tenantId: 't1', configuredByUserId: 'u2' }),
+      ).toThrow();
+      db.close();
+    });
+
+    it('allows inserting and decrypting a new v2 connection after the migration', () => {
+      copyMigrations(ALL);
+      const db = openDatabase(':memory:');
+      runMigrations(db, dir);
+      seedTenantAndUsers(db);
+
+      const key = randomBytes(32);
+      const plaintext = 'fresh-v2-jira-api-token';
+      const encryptedToken = encryptToken(plaintext, key, { tenantId: 't1' });
+      insertTenantWideRow(db, {
+        id: 'c1',
+        tenantId: 't1',
+        configuredByUserId: 'u1',
+        encryptedToken,
+      });
+
+      const row = db
+        .prepare('SELECT tenant_id, encrypted_token FROM jira_connections')
+        .get() as { tenant_id: string; encrypted_token: string };
+      expect(row.encrypted_token).toMatch(/^v2\./);
+      // Decryption uses the stored tenant only — no user component.
+      expect(decryptToken(row.encrypted_token, key, { tenantId: row.tenant_id })).toBe(plaintext);
+      db.close();
+    });
+
+    it('migration tracking prevents reapplication, so a later v2 row is not deleted', () => {
+      copyMigrations(ALL);
+      const db = openDatabase(':memory:');
+      runMigrations(db, dir);
+      seedTenantAndUsers(db);
+      insertTenantWideRow(db, { id: 'c1', tenantId: 't1', configuredByUserId: 'u1' });
+
+      // 005 is already recorded; a second run applies nothing and never re-deletes.
+      expect(runMigrations(db, dir)).toEqual([]);
+      expect(db.prepare('SELECT COUNT(*) AS n FROM jira_connections').get()).toEqual({ n: 1 });
+      db.close();
+    });
+  });
+
+  describe('legacy per-user row consolidation by migration 004', () => {
     function migrateWithLegacyRows(
       db: ReturnType<typeof openDatabase>,
       rows: Array<{
@@ -294,42 +381,6 @@ describe('jira_connections migration', () => {
         { tenant_id: 't1', configured_by_user_id: 'u1' },
         { tenant_id: 't2', configured_by_user_id: 'u3' },
       ]);
-      db.close();
-    });
-
-    it('keeps existing ciphertext decryptable using the migrated configured_by_user_id', () => {
-      const db = openDatabase(':memory:');
-      const key = randomBytes(32);
-      const plaintext = 'legacy-jira-api-token';
-      // Encrypt exactly as Milestone 5 did: bound to (tenantId, owning user id).
-      const ciphertext = encryptToken(plaintext, key, {
-        tenantId: 't1',
-        configuredByUserId: 'u1',
-      });
-
-      migrateWithLegacyRows(db, [
-        {
-          id: 'c1',
-          tenantId: 't1',
-          userId: 'u1',
-          siteUrl: 'https://x.atlassian.net',
-          email: 'u1@example.com',
-          accountId: 'acc-1',
-          encryptedToken: ciphertext,
-          updatedAt: '2026-02-01T00:00:00.000Z',
-        },
-      ]);
-
-      const row = db
-        .prepare('SELECT tenant_id, configured_by_user_id, encrypted_token FROM jira_connections')
-        .get() as { tenant_id: string; configured_by_user_id: string; encrypted_token: string };
-      // Decryption uses the configured_by_user_id stored on the row, not a
-      // currently-requesting user's id.
-      const decrypted = decryptToken(row.encrypted_token, key, {
-        tenantId: row.tenant_id,
-        configuredByUserId: row.configured_by_user_id,
-      });
-      expect(decrypted).toBe(plaintext);
       db.close();
     });
   });

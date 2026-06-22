@@ -2,12 +2,18 @@
 
 A focused proof of concept for integrating Oasis Security IdentityHub with Jira.
 
-This repository is built in milestones. The current milestone (Milestone 5)
-adds a backend-only Jira API-token connection: an authenticated user connects a
-Jira Cloud account by submitting a site URL, Atlassian email, and API token. The
-connection is a tenant-wide organization integration shared by all users in the
-tenant. The credentials are validated against Jira before storage, and the API
-token is encrypted at rest and never returned to the frontend.
+This repository is built in milestones. The current milestone (Milestone 7)
+adds a backend-only Jira integration layer: one central Jira client and a
+tenant-scoped integration service that validates a Jira project against the
+authenticated tenant's shared connection. It also moves Jira credential
+encryption to a tenant-only v2 format and deletes the older v1 connections.
+
+Milestone 5 added the backend-only Jira API-token connection that this builds
+on: an authenticated user connects a Jira Cloud account by submitting a site
+URL, Atlassian email, and API token. The connection is a tenant-wide
+organization integration shared by all users in the tenant. The credentials are
+validated against Jira before storage, and the API token is encrypted at rest
+and never returned to the frontend.
 
 Earlier milestones added backend-only application authentication (globally
 unique user emails, Argon2id-hashed passwords, persistent server-side sessions,
@@ -41,10 +47,10 @@ Implemented:
   are **not** supported: they must be sent to `https://api.atlassian.com/ex/jira/<cloudId>`
   rather than the direct `https://<site>.atlassian.net` origin this POC validates
   against, so a scoped token will fail verification here.
-- AES-256-GCM encryption of the API token with a fresh random nonce and
-  additional authenticated data bound to the credential type/version and the
-  credential context `(tenantId, configuredByUserId)`, using an
-  environment-provided 32-byte key.
+- AES-256-GCM encryption of the API token with a fresh random nonce. As of
+  Milestone 7 the additional authenticated data is bound to the credential type,
+  the credential format version, and the tenant only (the `v2` format); see the
+  Jira integration layer section below.
 - A `jira_connections` table with a composite foreign key from
   `(tenant_id, configured_by_user_id)` to `users(tenant_id, id)` and exactly one
   connection per tenant (`UNIQUE (tenant_id)`). Every read and write is scoped by

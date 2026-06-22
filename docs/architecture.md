@@ -1,7 +1,7 @@
 # Architecture
 
 This document describes the architecture that currently exists through
-Milestone 5. It intentionally avoids designing later domain layers in detail.
+Milestone 7. It intentionally avoids designing later domain layers in detail.
 
 ## Monorepo structure
 
@@ -371,44 +371,120 @@ email). Every failure is mapped to a sanitized outcome — rejected credentials,
 timeout, or unavailable — and never exposes raw Jira bodies, network errors, or
 redirect destinations.
 
-### Encryption at rest
+### Encryption at rest (v2, tenant-only)
 
 `token-cipher.ts` encrypts the API token with AES-256-GCM before it reaches
 SQLite. Each encryption uses a fresh random 12-byte nonce, and the serialized
-value is a versioned, dot-separated format (`v1.<nonce>.<ciphertext>.<authTag>`).
-Additional authenticated data binds the ciphertext to the credential
-type/version and the credential context `(tenantId, configuredByUserId)`, so a
-stored value cannot be moved to a different context and decrypted, and any
-tampering fails the authentication tag. The AAD byte layout is unchanged from the
-original per-user model — its fourth field was the owning user id and is now the
-`configuredByUserId` carried over by migration 004 — so existing ciphertext
-stays decryptable. Future decryption must therefore use the
-`configured_by_user_id` stored on the connection row (the last successful
-configurer), not the id of whoever is currently making a request. The AAD is
-encoded as a fixed-order JSON array rather than a delimiter-joined string, so a
-field value that itself contains the delimiter can never forge a field boundary
-(e.g. tenant `a:b`/user `c` and tenant `a`/user `b:c` produce distinct AAD). The
-32-byte key comes from
-`JIRA_CREDENTIAL_ENCRYPTION_KEY` (canonical standard base64), resolved at startup
-in `config/jira-crypto.ts`. Decoding is strict: the value must match the standard
-base64 alphabet with valid padding and re-encode back to exactly the input (which
-rejects invalid characters, embedded whitespace, trailing garbage, and malformed
-padding that `Buffer.from(_, 'base64')` would otherwise silently ignore) and
-decode to exactly 32 bytes. A malformed key fails startup with a sanitized error,
-while a missing key leaves the rest of the application running and makes the Jira
-endpoints return HTTP 503 `jira_not_configured`. The key is never logged or
-echoed in any error. The token is write-only in this milestone; nothing decrypts
-it yet (decryption exists and is tested for the round trip and ownership
-binding, and will be used by the M7 integration layer).
+value is a versioned, dot-separated format (`v2.<nonce>.<ciphertext>.<authTag>`).
+Additional authenticated data binds the ciphertext to the **credential type, the
+credential format version, and the owning tenant** — and nothing else. Because
+the Jira connection belongs to the tenant rather than to the user who configured
+it, the credential context is the `tenantId` alone: `configured_by_user_id` is
+audit metadata on the connection row and **does not participate in encryption or
+decryption**. A stored value therefore decrypts under its tenant regardless of
+who configured or is using the connection, but a ciphertext copied to another
+tenant fails the authentication tag, as does any tampering. The AAD is encoded as
+a fixed-order JSON array rather than a delimiter-joined string, so a field value
+that itself contains a delimiter can never forge a field boundary. Decryption
+accepts only the `v2` format; the previous `v1` format (whose AAD included the
+configuring user id) is unsupported and fails with a generic sanitized error
+rather than being migrated in place — see migration 005 below.
 
-### Why this verifier is not the M7 Jira client
+The 32-byte key comes from `JIRA_CREDENTIAL_ENCRYPTION_KEY` (canonical standard
+base64), resolved at startup in `config/jira-crypto.ts`. Decoding is strict: the
+value must match the standard base64 alphabet with valid padding and re-encode
+back to exactly the input (which rejects invalid characters, embedded whitespace,
+trailing garbage, and malformed padding that `Buffer.from(_, 'base64')` would
+otherwise silently ignore) and decode to exactly 32 bytes. A malformed key fails
+startup with a sanitized error, while a missing key leaves the rest of the
+application running and makes the Jira endpoints return HTTP 503
+`jira_not_configured`. The key is never logged or echoed in any error.
 
-The verifier does exactly one thing — confirm a submitted credential is valid and
-return its account id. It deliberately avoids becoming a general Jira client:
-there is no shared transport abstraction, no project discovery, and no ticket
-operations. M7 owns the reusable Jira integration layer; introducing that
-abstraction now would add indirection with no payoff and risk hiding the focused
-SSRF and credential-handling logic this milestone depends on.
+### Migration to v2 credentials (migration 005)
+
+`005_jira_connection_v2_credentials.sql` is a forward-only migration that
+`DELETE`s every row from `jira_connections`. Existing rows hold `v1` ciphertext
+bound to `(tenantId, configuredByUserId)`, which the tenant-only `v2` cipher
+cannot decrypt; rather than leave undecryptable rows that still appear connected,
+the migration removes them. Affected tenants become disconnected and must
+reconnect, and their next connection is stored as `v2`. The `jira_connections`
+schema — its columns, the `UNIQUE (tenant_id)` constraint, and the composite
+foreign key — is unchanged. Like every migration it runs inside the migrator's
+transaction and is recorded once in `schema_migrations`, so a re-run is skipped
+and never re-deletes. This is an approved POC decision: there is no backward
+compatibility with `v1` ciphertext, and deleting existing local Jira connection
+data is acceptable. Migrations 003 and 004 are not modified.
+
+## Jira integration layer (Milestone 7)
+
+Milestone 7 adds one secure backend abstraction for authenticated Jira Cloud API
+access using the authenticated tenant's shared connection. It is backend only:
+there is no new frontend, no new REST endpoint, and no ticket creation. It owns
+two operations currently required — loading the Jira account identity (for the
+existing credential-verification flow) and validating a Jira project — and
+deliberately avoids becoming a general-purpose Atlassian SDK.
+
+### The central Jira client
+
+`jira-client.ts` is the single component that owns Jira HTTP behavior; nothing
+else in the application builds a Jira request, reads a Jira response, or touches
+the Authorization header. A `JiraClient` is constructed with an already-validated
+direct Jira Cloud origin, the stored Atlassian email, the decrypted API token, an
+injected fetch-compatible transport, and a timeout. It:
+
+- builds Basic authentication once in memory and never persists or logs the
+  plaintext token or the Authorization header;
+- constructs request URLs only from the validated origin plus
+  application-controlled paths, and safely percent-encodes the dynamic project
+  identifier — it never uses a response's own URL for a follow-up;
+- uses `redirect: 'manual'` and never follows redirects;
+- arms an explicit timeout across the entire response lifecycle, including the
+  full body read, so a stall while reading the body maps to `timeout`;
+- validates every response shape at runtime; and
+- returns only sanitized outcomes — never a raw Jira body, network error,
+  redirect location, stack trace, credential, or internal exception message.
+
+`loadAccountIdentity()` performs `GET /rest/api/3/myself` and returns the account
+id or a sanitized `credentials_rejected` / `timeout` / `unavailable` failure.
+`validateProject(projectIdOrKey)` performs
+`GET /rest/api/3/project/{projectIdOrKey}?expand=issueTypes`, validates the
+response shape, returns the project id, canonical key, and the id of the
+non-subtask issue type named exactly `Task`, or a sanitized failure
+distinguishing `project_inaccessible` (404), `task_unsupported` (no normal
+`Task`), `credentials_rejected` (401/403), `timeout`, and `unavailable`
+(redirects, 429, 5xx, network errors, malformed JSON, and malformed success
+shapes). A project whose only `Task` is a subtask is **not** accepted.
+
+### The credential verifier reuses the client
+
+`jira-verifier.ts` no longer maintains its own HTTP implementation. It builds a
+short-lived `JiraClient` and calls `loadAccountIdentity()`, mapping the result to
+the unchanged M5 verifier contract (`accountId` on success;
+`credentials_rejected`, `timeout`, or `unavailable` on failure). The M5 connection
+endpoints, status codes, and sanitized error envelopes are therefore preserved,
+including the rule that a failed verification never overwrites an existing
+connection.
+
+### Tenant-scoped integration service
+
+`jira-integration-service.ts` is the tenant boundary for Jira access. It receives
+an `AuthContext` and loads the connection **only** through
+`JiraConnectionRepository.findByTenant(context.tenantId)`. It never accepts a
+tenantId, userId, connectionId, site URL, email, or credential-ownership value
+from untrusted request data, so cross-tenant access is impossible even when
+another connection's id, key, site URL, or configurer is known. When the tenant
+has no connection it returns a distinct `not_connected` result. As defense in
+depth it re-validates the stored site URL before any network request and performs
+no network call when it is invalid. It decrypts the token only immediately before
+an outbound operation, bound to the stored connection's `tenantId` alone (never
+`context.userId` or `configured_by_user_id`); a wrong key, malformed ciphertext,
+unsupported (`v1`) version, or authentication-tag failure all collapse into one
+sanitized `configuration_error`. It then creates a short-lived `JiraClient` with
+the stored origin, stored email, and decrypted token, keeping the plaintext token
+in the smallest practical scope, and maps the client's outcome to a tenant-scoped
+project-validation result (`valid`, `not_connected`, `project_inaccessible`,
+`task_unsupported`, `credentials_rejected`, `timeout`, `unavailable`,
+`configuration_error`). No result variant ever carries the plaintext token.
 
 ### Terminal error handling
 
