@@ -334,9 +334,20 @@ These steps require a real Jira Cloud site, account email, and an **unscoped**
 [API token](https://id.atlassian.com/manage-profile/security/api-tokens) (create
 the token without selecting any scopes). Scoped tokens are not supported by this
 POC, because they target `https://api.atlassian.com/ex/jira/<cloudId>` instead of
-the direct site origin. These steps were **not** executed as part of building
-this milestone (no live Jira call was made); run them yourself to validate end to
-end.
+the direct site origin. Run them yourself to reproduce the validation end to end.
+
+This milestone was validated against live Jira with the following results:
+
+- A live Jira connection and a reconnection both succeeded.
+- An invalid token returned HTTP 422 and preserved the existing connection.
+- Same-tenant and cross-tenant isolation held: each user saw only their own
+  connection.
+- The API token was encrypted at rest in SQLite (stored value prefixed `v1.`,
+  never the plaintext) and was absent from API responses, logs, generated files,
+  and `git status`.
+- An invalid Jira site URL returned HTTP 400 with no outbound request.
+- The missing and malformed encryption-key paths were not re-exercised by hand;
+  they are covered by automated tests.
 
 ```bash
 # 1. Generate and export a key, then start the API with Jira configured.
