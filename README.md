@@ -1074,9 +1074,31 @@ can create `Task` issues in.
    ticket form does not appear at all.
 7. **Stored-credential rejection.** With a connection whose token has been revoked
    or rotated, attempt a creation and confirm the reconnect guidance appears.
-8. **Timeout / network uncertainty.** Simulate a slow/unavailable upstream (or
-   stop the API mid-request) and confirm the uncertain-outcome warning to check
-   Jira before retrying appears, and that the app does not retry automatically.
+8. **Uncertain outcomes (duplicate-creation risk).** Because ticket creation is
+   not idempotent, exercise every failure that can occur after the request leaves
+   the browser. Some are hard to reproduce against a real Jira instance, so
+   controlled frontend/API mocking (for example, a DevTools network override or a
+   stubbed `createTicket`/`/api/tickets` response) is acceptable. Cover all five:
+   - **`jira_timeout` (504).** Simulate a slow/unresponsive upstream so the backend
+     returns a timeout.
+   - **`jira_unreachable` (502).** Simulate an unavailable upstream or an invalid
+     upstream response.
+   - **Browser/network interruption after submission.** Send the request, then drop
+     connectivity or stop the API mid-request so the browser never sees a response.
+   - **`internal_error` (500).** Simulate the server failing after creation — this
+     can represent the case where Jira created the issue but local provenance
+     persistence failed.
+   - **Malformed or unexpected success/server response.** Return a non-JSON body, a
+     success body missing `issueId`/`issueKey`, or an unrecognized status/code.
+
+   For **each** case, confirm that:
+   - the UI states the ticket **may have been created**,
+   - the user is told to **check Jira before retrying**,
+   - the UI warns that **retrying may create a duplicate**,
+   - **no automatic second `POST /api/tickets`** is sent (DevTools Network shows a
+     single request; only an explicit user resubmit produces another),
+   - **no raw backend or Jira details** (raw messages, technical codes, stack
+     traces, credentials, session values, or internal IDs) are displayed.
 9. **Duplicate-submit prevention.** Click **Create ticket** repeatedly while a
    request is pending and confirm exactly one `POST /api/tickets` is sent.
 10. **Shared connection, real provenance.** Have two users in the same tenant each
