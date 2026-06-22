@@ -349,27 +349,21 @@ only and, like every migration, is recorded once and skipped on re-run.
 
 ### Credential verification flow
 
-The token is verified before anything is stored. `jira-verifier.ts` is a small,
-focused verifier — deliberately *not* the reusable Jira integration layer planned
-for M7 (see below). It validates the submitted site URL first
-(`site-url.ts`), accepting only normalized `https://<site>.atlassian.net`
-origins; this is the SSRF boundary, so no network request is made until
-validation succeeds. It then calls `GET {origin}/rest/api/3/myself` with Jira
-Cloud Basic authentication, building the `Authorization` header only in memory
-for the outbound request — never persisted, never logged. The credential is an
-**unscoped** Atlassian API token; scoped tokens are not supported, because they
-must be sent to `https://api.atlassian.com/ex/jira/<cloudId>` rather than the
-direct `https://<site>.atlassian.net` origin this verifier targets, so they fail
-here. The HTTP transport is injected, so tests never reach live Jira. Redirects
-are not followed, and an explicit timeout bounds the *entire* response lifecycle:
-the abort stays armed across the request, the status check, and the full body
-read, and is cleared only once the whole operation finishes, so a stall while
-reading the body maps to `timeout` rather than `unavailable`. The JSON response
-shape is validated at runtime: a success must carry a non-empty `accountId` (the
-submitted email is stored as the username, since Jira may hide the account
-email). Every failure is mapped to a sanitized outcome — rejected credentials,
-timeout, or unavailable — and never exposes raw Jira bodies, network errors, or
-redirect destinations.
+The token is verified before anything is stored. The submitted site URL is
+validated first (`site-url.ts`), accepting only normalized
+`https://<site>.atlassian.net` origins; this is the SSRF boundary, so no network
+request is made until validation succeeds. `jira-verifier.ts` is then a small
+wrapper that preserves the Milestone 5 verification contract: it delegates all
+Jira HTTP behavior to the central `JiraClient` (see "Jira integration layer"
+below), which owns `Authorization`-header construction, timeout handling,
+redirect handling, response parsing, and sanitized failure mapping. The verifier
+simply calls `loadAccountIdentity()` and returns the existing M5 outcomes —
+`accountId` on success, or a sanitized `credentials_rejected` / `timeout` /
+`unavailable` failure. The credential is an **unscoped** Atlassian API token;
+scoped tokens are not supported, because they must be sent to
+`https://api.atlassian.com/ex/jira/<cloudId>` rather than the direct
+`https://<site>.atlassian.net` origin the client targets, so they fail here. The
+HTTP transport is injected, so tests never reach live Jira.
 
 ### Encryption at rest (v2, tenant-only)
 

@@ -583,23 +583,40 @@ must never be committed):
 
 ```js
 // TEMPORARY validation script — delete after use, do not commit.
+// Reuses the application's own configuration resolvers so it opens the same
+// database (DATABASE_PATH or the default apps/api/data/app.db, resolved relative
+// to the module, not the working directory) and decodes the key identically.
+import { resolveDatabasePath } from './dist/config/database.js';
+import { resolveJiraEncryptionKey } from './dist/config/jira-crypto.js';
 import { openDatabase } from './dist/database/connection.js';
 import { JiraIntegrationService } from './dist/jira/jira-integration-service.js';
 
-const db = openDatabase(process.env.NHI_DATABASE_PATH ?? 'data/app.db');
-const encryptionKey = Buffer.from(process.env.JIRA_CREDENTIAL_ENCRYPTION_KEY, 'base64');
-const service = new JiraIntegrationService({ db, encryptionKey, fetch });
+async function main() {
+  const encryptionKey = resolveJiraEncryptionKey();
+  if (encryptionKey === null) {
+    throw new Error('JIRA_CREDENTIAL_ENCRYPTION_KEY is not set; export the same key used when the connection was created.');
+  }
 
-// Replace with real tenant/user ids from your seeded data.
-const acmeAlice = { userId: 'user-acme-alice', tenantId: 'tenant-acme' };
-const acmeBob = { userId: 'user-acme-bob', tenantId: 'tenant-acme' };
-const globexAlice = { userId: 'user-globex-alice', tenantId: 'tenant-globex' };
+  const db = openDatabase(resolveDatabasePath());
+  try {
+    const service = new JiraIntegrationService({ db, encryptionKey, fetch });
 
-console.log('accessible Task project', await service.validateProject(acmeAlice, 'YOUR_PROJECT_KEY'));
-console.log('same tenant, other user', await service.validateProject(acmeBob, 'YOUR_PROJECT_KEY'));
-console.log('nonexistent / inaccessible', await service.validateProject(acmeAlice, 'NOPE'));
-console.log('project without a Task type', await service.validateProject(acmeAlice, 'PROJECT_WITHOUT_TASK'));
-console.log('other tenant is isolated', await service.validateProject(globexAlice, 'YOUR_PROJECT_KEY'));
+    // Replace with real tenant/user ids from your seeded data.
+    const acmeAlice = { userId: 'user-acme-alice', tenantId: 'tenant-acme' };
+    const acmeBob = { userId: 'user-acme-bob', tenantId: 'tenant-acme' };
+    const globexAlice = { userId: 'user-globex-alice', tenantId: 'tenant-globex' };
+
+    console.log('accessible Task project', await service.validateProject(acmeAlice, 'YOUR_PROJECT_KEY'));
+    console.log('same tenant, other user', await service.validateProject(acmeBob, 'YOUR_PROJECT_KEY'));
+    console.log('nonexistent / inaccessible', await service.validateProject(acmeAlice, 'NOPE'));
+    console.log('project without a Task type', await service.validateProject(acmeAlice, 'PROJECT_WITHOUT_TASK'));
+    console.log('other tenant is isolated', await service.validateProject(globexAlice, 'YOUR_PROJECT_KEY'));
+  } finally {
+    db.close();
+  }
+}
+
+await main();
 ```
 
 ```bash
