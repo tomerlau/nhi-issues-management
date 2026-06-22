@@ -35,3 +35,6 @@ apps/api/data/
 
 # Local Claude Code settings
 .claude/settings.local.json
+
+# Local HTTP cookie jars
+*.cookies

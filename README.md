@@ -2,27 +2,32 @@
 
 A focused proof of concept for integrating Oasis Security IdentityHub with Jira.
 
-This repository is built in milestones. The current milestone (Milestone 6)
-adds the **Jira connection UI**: inside the authenticated application shell an
-authenticated user can view, create, and replace the tenant-wide Jira connection
-introduced by the Milestone 5 backend. The UI shows the shared connection status,
-explains that the connection is shared by everyone in the tenant, displays only
-the safe site URL and Atlassian email, and lets any tenant user replace the
-shared connection. The Atlassian API token is entered through an uncontrolled
-secret input, exists only transiently during submission, is cleared immediately
-when an actual POST request begins, and is never stored in React state or any
-browser storage.
+This repository is built in milestones. The current milestone (Milestone 7)
+adds a backend-only Jira integration layer: one central Jira client and a
+tenant-scoped integration service that validates a Jira project against the
+authenticated tenant's shared connection. It also moves Jira credential
+encryption to a tenant-only v2 format and deletes the older v1 connections.
+
+Milestone 5 added the backend-only Jira API-token connection that this builds
+on: an authenticated user connects a Jira Cloud account by submitting a site
+URL, Atlassian email, and API token. The connection is a tenant-wide
+organization integration shared by all users in the tenant. The credentials are
+validated against Jira before storage, and the API token is encrypted at rest
+and never returned to the frontend.
 
 Earlier milestones added backend-only application authentication (globally
 unique user emails, Argon2id-hashed passwords, persistent server-side sessions,
 secure session cookies, and reusable authentication middleware), the
 authenticated frontend application shell (initial session restoration, login and
 logout, authenticated and unauthenticated states, loading states, and clear
-authentication and network errors), and a backend-only Jira API-token connection
+authentication and network errors), a backend-only Jira API-token connection
 (a tenant-wide Jira Cloud connection validated against Jira before storage, with
-the API token encrypted at rest and never returned to the frontend).
+the API token encrypted at rest and never returned to the frontend), and the
+frontend Jira connection UI (a tenant-wide connection panel in the authenticated
+shell that views, creates, and replaces the shared connection while keeping the
+Atlassian API token out of React state and browser storage).
 
-## Current milestone scope (Milestone 6: Jira connection UI)
+## Earlier milestone scope (Milestone 6: Jira connection UI)
 
 Frontend only; it consumes the unchanged Milestone 5 backend contract
 (`GET`/`POST /api/jira/connection`). No backend changes were made.
@@ -76,7 +81,59 @@ scoped API-token support; roles, permissions, or tenant-admin UI; API-key
 functionality; browser credential persistence; global frontend state; and
 routing.
 
-## Current milestone scope (Milestone 5: Jira API-token connection)
+## Current milestone scope (Milestone 7: Jira integration layer)
+
+Backend only. Milestone 7 provides one secure abstraction for authenticated Jira
+Cloud API access using the authenticated tenant's shared connection.
+
+Implemented:
+
+- **A central Jira client** (`apps/api/src/jira/jira-client.ts`) that owns all
+  Jira HTTP behavior: it targets only the already-validated direct
+  `https://<site>.atlassian.net` origin, builds Basic authentication in memory
+  (never persisting or logging the plaintext token or Authorization header), uses
+  an injected fetch transport, applies a timeout that stays armed through the full
+  response-body read, uses `redirect: 'manual'` and never follows redirects,
+  safely percent-encodes dynamic project identifiers, validates response shapes at
+  runtime, and returns only sanitized outcomes (never raw Jira bodies, network
+  errors, redirect locations, stack traces, or credentials). It is intentionally
+  not a general-purpose Atlassian SDK.
+- **The M5 credential verifier reuses the client** instead of maintaining a second
+  HTTP implementation, preserving its existing outcome contract
+  (`accountId`/`credentials_rejected`/`timeout`/`unavailable`) and all M5
+  connection endpoint behavior.
+- **A tenant-scoped integration service**
+  (`apps/api/src/jira/jira-integration-service.ts`) that receives an
+  `AuthContext`, loads the connection only via
+  `JiraConnectionRepository.findByTenant(context.tenantId)`, re-validates the
+  stored site URL before any network call, decrypts the token just-in-time bound
+  to the stored tenant only, creates a short-lived client, and validates a Jira
+  project. Cross-tenant access is impossible even when another connection id, Jira
+  key, site URL, or configurer id is known.
+- **Project validation** via `GET /rest/api/3/project/{idOrKey}?expand=issueTypes`
+  returning the project id, canonical key, and the id of the **fixed**, non-subtask
+  issue type named exactly `Task`. Distinct outcomes cover a valid project, not
+  connected, an inaccessible project, an unsupported `Task` type, rejected
+  credentials, timeout, unavailable, and an internal configuration failure. A
+  subtask named `Task` is not accepted.
+- **Tenant-only v2 credential encryption.** The token AAD now binds only the
+  credential type, the credential format version, and `tenantId`;
+  `configured_by_user_id` is audit metadata only and no longer participates in
+  encryption or decryption. Stored tokens use the `v2.` prefix.
+- **Migration 005** (`005_jira_connection_v2_credentials.sql`), a forward-only
+  `DELETE` of all `jira_connections` rows. Existing v1 connections cannot be
+  decrypted under the tenant-only context, so affected tenants are disconnected
+  and must reconnect; their next connection is stored as v2.
+
+Explicitly **not** implemented in Milestone 7: any frontend or Jira connection UI;
+ticket creation; local ticket provenance; recent-tickets; a REST endpoint for
+project validation; external application API-key authentication; Jira project
+discovery or search; configurable issue types; custom Jira fields;
+OAuth/3LO/refresh tokens/rotation; Jira Server or Data Center support; and any
+general-purpose Atlassian SDK. The project currently has no ticket-creation flow,
+recent-ticket flow, project-discovery UI, or external Jira REST endpoint.
+
+## Earlier milestone scope (Milestone 5: Jira API-token connection)
 
 Backend only. An authenticated application user connects a Jira Cloud account
 for their tenant. The connection is a tenant-wide organization integration
@@ -101,10 +158,10 @@ Implemented:
   are **not** supported: they must be sent to `https://api.atlassian.com/ex/jira/<cloudId>`
   rather than the direct `https://<site>.atlassian.net` origin this POC validates
   against, so a scoped token will fail verification here.
-- AES-256-GCM encryption of the API token with a fresh random nonce and
-  additional authenticated data bound to the credential type/version and the
-  credential context `(tenantId, configuredByUserId)`, using an
-  environment-provided 32-byte key.
+- AES-256-GCM encryption of the API token with a fresh random nonce. As of
+  Milestone 7 the additional authenticated data is bound to the credential type,
+  the credential format version, and the tenant only (the `v2` format); see the
+  Jira integration layer section below.
 - A `jira_connections` table with a composite foreign key from
   `(tenant_id, configured_by_user_id)` to `users(tenant_id, id)` and exactly one
   connection per tenant (`UNIQUE (tenant_id)`). Every read and write is scoped by
@@ -116,7 +173,7 @@ UI; OAuth 2.0 / 3LO, client id/secret, callbacks, state, or token refresh; a
 reusable Jira API client (owned by M7); Jira project discovery or validation;
 ticket creation; a disconnect endpoint; and production KMS or key rotation.
 
-## Current milestone scope (Milestone 4: Authenticated application shell)
+## Earlier milestone scope (Milestone 4: Authenticated application shell)
 
 Implemented:
 
@@ -540,13 +597,106 @@ Confirm exactly one row per tenant, audit metadata, and that no token leaks:
 
 ```bash
 # One row per tenant; configured_by_user_id is the last successful configurer;
-# the stored token starts with the version prefix (v1.) and is never the plaintext.
+# the stored token starts with the version prefix (v2.) and is never the plaintext.
 sqlite3 apps/api/data/app.db \
   'SELECT tenant_id, configured_by_user_id, site_url, email, substr(encrypted_token,1,3) FROM jira_connections;'
 ```
 
 The plaintext token must not appear in API logs, API responses, frontend state,
 generated files, the database token field, or `git status`.
+
+## Manual Jira integration-layer validation (Milestone 7)
+
+The Milestone 7 integration layer (`JiraIntegrationService`) is internal: it has
+no committed HTTP route or product surface yet. Validate it with a **temporary**
+local script that you delete afterwards — do not commit any throwaway CLI, route,
+or product surface.
+
+First reproduce the v1 → v2 migration. Starting from a database created before
+Milestone 7 (one that still holds a Milestone 5 connection encrypted with the v1
+`v1.` prefix), apply migrations and confirm migration 005 disconnects every
+tenant:
+
+```bash
+# Inspect existing connections before migrating (token starts with v1.).
+sqlite3 apps/api/data/app.db \
+  'SELECT tenant_id, substr(encrypted_token,1,3) FROM jira_connections;'
+
+npm run migrate   # applies 005_jira_connection_v2_credentials.sql
+
+# After migration the table is empty: every tenant is disconnected.
+sqlite3 apps/api/data/app.db 'SELECT count(*) FROM jira_connections;'   # 0
+```
+
+Reconnect through the Milestone 5 endpoint (see the section above) and confirm
+the freshly stored token now carries the `v2.` prefix:
+
+```bash
+sqlite3 apps/api/data/app.db \
+  'SELECT tenant_id, substr(encrypted_token,1,3) FROM jira_connections;'  # v2.
+```
+
+Then exercise the integration service directly with a temporary script. Create
+`apps/api/tmp-validate.mjs` and delete it when finished (it is a throwaway and
+must never be committed):
+
+```js
+// TEMPORARY validation script — delete after use, do not commit.
+// Reuses the application's own configuration resolvers so it opens the same
+// database (DATABASE_PATH or the default apps/api/data/app.db, resolved relative
+// to the module, not the working directory) and decodes the key identically.
+import { resolveDatabasePath } from './dist/config/database.js';
+import { resolveJiraEncryptionKey } from './dist/config/jira-crypto.js';
+import { openDatabase } from './dist/database/connection.js';
+import { JiraIntegrationService } from './dist/jira/jira-integration-service.js';
+
+async function main() {
+  const encryptionKey = resolveJiraEncryptionKey();
+  if (encryptionKey === null) {
+    throw new Error('JIRA_CREDENTIAL_ENCRYPTION_KEY is not set; export the same key used when the connection was created.');
+  }
+
+  const db = openDatabase(resolveDatabasePath());
+  try {
+    const service = new JiraIntegrationService({ db, encryptionKey, fetch });
+
+    // Replace with real tenant/user ids from your seeded data.
+    const acmeAlice = { userId: 'user-acme-alice', tenantId: 'tenant-acme' };
+    const acmeBob = { userId: 'user-acme-bob', tenantId: 'tenant-acme' };
+    const globexAlice = { userId: 'user-globex-alice', tenantId: 'tenant-globex' };
+
+    console.log('accessible Task project', await service.validateProject(acmeAlice, 'YOUR_PROJECT_KEY'));
+    console.log('same tenant, other user', await service.validateProject(acmeBob, 'YOUR_PROJECT_KEY'));
+    console.log('nonexistent / inaccessible', await service.validateProject(acmeAlice, 'NOPE'));
+    console.log('project without a Task type', await service.validateProject(acmeAlice, 'PROJECT_WITHOUT_TASK'));
+    console.log('other tenant is isolated', await service.validateProject(globexAlice, 'YOUR_PROJECT_KEY'));
+  } finally {
+    db.close();
+  }
+}
+
+await main();
+```
+
+```bash
+npm run build --workspace apps/api
+export JIRA_CREDENTIAL_ENCRYPTION_KEY="<the key used when connecting>"
+node apps/api/tmp-validate.mjs
+rm apps/api/tmp-validate.mjs   # remove the throwaway script
+```
+
+Expected outcomes:
+
+- **Accessible project supporting Task** → `{ status: 'valid', projectId, projectKey, taskIssueTypeId }`.
+- **Same-tenant second user** (Bob) → identical `valid` result; the connection is
+  shared per tenant, decrypted by `tenantId` only.
+- **Nonexistent / inaccessible project** → `{ status: 'project_inaccessible' }`.
+- **Project with no non-subtask `Task` type** → `{ status: 'task_unsupported' }`.
+- **Another tenant** (Globex, no connection) → `{ status: 'not_connected' }` with
+  no outbound request.
+
+Throughout, confirm the plaintext token never appears in stdout, logs, API
+responses, the SQLite `encrypted_token` field, generated files, or `git status`.
 
 ## Jira connection UI (Milestone 6)
 

@@ -77,9 +77,11 @@ export class JiraConnectionService {
       return { status: verification.reason };
     }
 
+    // The connection is tenant-bound: the token is encrypted against the tenant
+    // alone. context.userId is recorded as audit metadata only and intentionally
+    // does not participate in encryption.
     const encryptedToken = encryptToken(input.apiToken, this.encryptionKey, {
       tenantId: context.tenantId,
-      configuredByUserId: context.userId,
     });
 
     this.repository.upsert(context.tenantId, {

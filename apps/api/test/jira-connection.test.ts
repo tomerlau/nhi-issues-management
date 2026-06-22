@@ -276,7 +276,7 @@ describe('jira connection endpoints', () => {
       // Plaintext token never appears anywhere in the stored row.
       expect(dump).not.toContain(VALID_TOKEN);
       expect(rows[0].encrypted_token).not.toBe(VALID_TOKEN);
-      expect(String(rows[0].encrypted_token)).toMatch(/^v1\./);
+      expect(String(rows[0].encrypted_token)).toMatch(/^v2\./);
     });
 
     it('stores nothing when the first connection fails verification', async () => {

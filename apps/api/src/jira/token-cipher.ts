@@ -3,21 +3,23 @@ import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 /**
  * Authenticated encryption for the Jira API token before it is written to
  * SQLite. AES-256-GCM with a fresh random nonce per encryption and additional
- * authenticated data (AAD) that binds the ciphertext to the credential
- * type/version and the credential context (tenantId, configuredByUserId). Because
- * the AAD is authenticated, a ciphertext encrypted in one context cannot be
- * decrypted under a different context, and tampering with the serialized value
- * fails the authentication tag.
+ * authenticated data (AAD) that binds the ciphertext to the credential type, the
+ * credential format version, and the owning tenant. Because the AAD is
+ * authenticated, a ciphertext encrypted for one tenant cannot be decrypted under
+ * a different tenant, and tampering with the serialized value fails the
+ * authentication tag.
  *
- * The connection is tenant-wide, so future decryption must use the
- * `configuredByUserId` stored on the connection row (the user who last configured
- * it), not the id of whoever is currently making a request.
+ * The Jira connection belongs to the tenant, not to any individual user, so the
+ * credential context is the tenant alone. `configured_by_user_id` is audit
+ * metadata recorded on the connection row and intentionally does not participate
+ * in encryption or decryption: any user in the tenant uses the same shared
+ * connection regardless of who configured it.
  *
  * Serialized format (versioned, dot-separated base64 fields):
- *   v1.<nonce>.<ciphertext>.<authTag>
+ *   v2.<nonce>.<ciphertext>.<authTag>
  */
 
-const VERSION = 'v1';
+const VERSION = 'v2';
 const ALGORITHM = 'aes-256-gcm';
 const KEY_BYTES = 32;
 const NONCE_BYTES = 12;
@@ -25,38 +27,28 @@ const AUTH_TAG_BYTES = 16;
 
 /** Identifies what kind of credential this ciphertext holds, bound into the AAD. */
 const CREDENTIAL_TYPE = 'jira-api-token';
-const CREDENTIAL_VERSION = '1';
+/** The credential format version, bound into the AAD alongside the serialized version prefix. */
+const CREDENTIAL_FORMAT_VERSION = '2';
 
 /** The credential context an encrypted credential is bound to. */
 export interface CredentialContext {
   tenantId: string;
-  /** The user who configured the connection; stored on the connection row. */
-  configuredByUserId: string;
 }
 
 /**
  * Build the additional authenticated data. The fields are encoded as a JSON
  * array with a fixed element order so the boundaries between them are
  * unambiguous. A delimiter-joined string (e.g. `a:b:c`) is ambiguous because a
- * field value may itself contain the delimiter — tenantId `a:b` +
- * configuredByUserId `c` and tenantId `a` + configuredByUserId `b:c` would
- * produce identical AAD and could be substituted for one another. JSON string
- * encoding escapes the contents so no field value can ever forge a boundary.
+ * field value may itself contain the delimiter; JSON string encoding escapes the
+ * contents so no field value can ever forge a boundary.
  *
- * The byte layout is the fixed order [credential type, credential version,
- * tenantId, configuredByUserId]; this matches the layout written before the
- * connection became tenant-wide (its fourth field was the owning user id, which
- * is now carried over as configuredByUserId), so existing ciphertext stays
- * decryptable.
+ * The fixed byte layout is [credential type, credential format version,
+ * tenantId]. There is intentionally no user component: the connection is
+ * tenant-bound.
  */
 function buildAad(context: CredentialContext): Buffer {
   return Buffer.from(
-    JSON.stringify([
-      CREDENTIAL_TYPE,
-      CREDENTIAL_VERSION,
-      context.tenantId,
-      context.configuredByUserId,
-    ]),
+    JSON.stringify([CREDENTIAL_TYPE, CREDENTIAL_FORMAT_VERSION, context.tenantId]),
     'utf8',
   );
 }
@@ -91,10 +83,10 @@ export function encryptToken(
 }
 
 /**
- * Decrypt a serialized token. Throws for an unsupported version, a malformed
- * payload, a wrong key, a tampered ciphertext, or a mismatched ownership
- * context (the AAD fails to authenticate). Errors are intentionally generic and
- * never include key or token material.
+ * Decrypt a serialized token. Throws for an unsupported version (including the
+ * removed v1 format), a malformed payload, a wrong key, a tampered ciphertext, or
+ * a mismatched tenant context (the AAD fails to authenticate). Errors are
+ * intentionally generic and never include key or token material.
  */
 export function decryptToken(
   serialized: string,
