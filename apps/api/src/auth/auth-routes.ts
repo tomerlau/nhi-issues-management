@@ -1,7 +1,5 @@
 import { Router } from 'express';
-import './express-request.js';
 import type { AuthService } from './auth-service.js';
-import { createRequireAuth } from './auth-middleware.js';
 import { clearSessionCookie, readSessionToken, setSessionCookie } from './cookies.js';
 import { invalidCredentialsError, invalidRequestError } from './errors.js';
 
@@ -43,7 +41,6 @@ export function createAuthRouter(
   options: AuthRouterOptions,
 ): Router {
   const router = Router();
-  const requireAuth = createRequireAuth(authService);
 
   // Authentication responses must never be cached by browsers or proxies.
   router.use((_request, response, next) => {
@@ -71,8 +68,15 @@ export function createAuthRouter(
       .catch(next);
   });
 
-  router.get('/session', requireAuth, (request, response) => {
-    response.status(200).json({ user: request.auth!.user });
+  // Session restoration is a normal application state, not a protected route:
+  // being unauthenticated is not a request failure. It therefore always returns
+  // HTTP 200, with `user: null` when there is no valid session, so an initial
+  // unauthenticated load does not surface as a failed request in the browser.
+  // Protected routes continue to use `createRequireAuth`, which rejects with 401.
+  router.get('/session', (request, response) => {
+    const token = readSessionToken(request);
+    const resolved = token ? authService.resolveSession(token) : null;
+    response.status(200).json({ user: resolved ? resolved.user : null });
   });
 
   router.post('/logout', (request, response) => {

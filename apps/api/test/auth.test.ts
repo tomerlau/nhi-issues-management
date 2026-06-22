@@ -1,8 +1,11 @@
 import type { DatabaseSync } from 'node:sqlite';
+import express from 'express';
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from '../src/app.js';
 import { SessionRepository } from '../src/repositories/session-repository.js';
+import { AuthService } from '../src/auth/auth-service.js';
+import { createRequireAuth } from '../src/auth/auth-middleware.js';
 import { hashSessionToken } from '../src/auth/session-token.js';
 import { SESSION_COOKIE_NAME } from '../src/auth/cookies.js';
 import { createSeededMemoryDb, DEMO_CREDENTIALS } from './helpers.js';
@@ -203,22 +206,24 @@ describe('authentication', () => {
       expect(res.body.user.id).toBe('user-acme-alice');
     });
 
-    it('returns 401 for a missing cookie', async () => {
+    it('returns 200 with { user: null } and no-store for a missing cookie', async () => {
       const app = createApp(db, { cookieSecure: false });
       const res = await request(app).get('/api/auth/session');
-      expect(res.status).toBe(401);
-      expect(res.body.error.code).toBe('unauthenticated');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ user: null });
+      expect(res.headers['cache-control']).toBe('no-store');
     });
 
-    it('returns 401 for an invalid token', async () => {
+    it('returns 200 with { user: null } for an invalid token', async () => {
       const app = createApp(db, { cookieSecure: false });
       const res = await request(app)
         .get('/api/auth/session')
         .set('Cookie', `${SESSION_COOKIE_NAME}=not-a-real-token`);
-      expect(res.status).toBe(401);
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ user: null });
     });
 
-    it('returns 401 for an expired session', async () => {
+    it('returns 200 with { user: null } for an expired session', async () => {
       const sessions = new SessionRepository(db);
       const rawToken = 'expired-token-value';
       sessions.create({
@@ -233,10 +238,11 @@ describe('authentication', () => {
       const res = await request(app)
         .get('/api/auth/session')
         .set('Cookie', `${SESSION_COOKIE_NAME}=${rawToken}`);
-      expect(res.status).toBe(401);
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ user: null });
     });
 
-    it('returns 401 for a revoked (deleted) session', async () => {
+    it('returns 200 with { user: null } for a revoked (deleted) session', async () => {
       const agent = request.agent(createApp(db, { cookieSecure: false }));
       const login = await agent
         .post('/api/auth/login')
@@ -246,7 +252,8 @@ describe('authentication', () => {
       new SessionRepository(db).deleteByTokenHash(hashSessionToken(rawToken));
 
       const res = await agent.get('/api/auth/session');
-      expect(res.status).toBe(401);
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ user: null });
     });
   });
 
@@ -275,7 +282,9 @@ describe('authentication', () => {
       const logout = await agentA.post('/api/auth/logout');
       expect(logout.status).toBe(200);
 
-      expect((await agentA.get('/api/auth/session')).status).toBe(401);
+      const afterLogout = await agentA.get('/api/auth/session');
+      expect(afterLogout.status).toBe(200);
+      expect(afterLogout.body).toEqual({ user: null });
       const stillB = await agentB.get('/api/auth/session');
       expect(stillB.status).toBe(200);
       expect(stillB.body.user.id).toBe('user-acme-bob');
@@ -335,7 +344,49 @@ describe('authentication', () => {
         .get('/api/auth/session?userId=user-acme-alice&tenantId=tenant-acme')
         .set('X-User-Id', 'user-acme-alice')
         .set('X-Tenant-Id', 'tenant-acme');
+      // Spoofed identity input without a valid session cookie is still not
+      // authenticated: restoration returns { user: null }, never a user.
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ user: null });
+    });
+  });
+
+  describe('requireAuth middleware (protected routes)', () => {
+    // Session restoration is intentionally unprotected, but the reusable
+    // requireAuth middleware that guards genuine protected routes must still
+    // reject unauthenticated requests with HTTP 401. Exercise it directly on a
+    // throwaway protected route so the guarantee is covered without adding a
+    // production route.
+    function appWithProtectedRoute(): express.Express {
+      const app = express();
+      const requireAuth = createRequireAuth(new AuthService(db));
+      app.get('/protected', requireAuth, (request, response) => {
+        response.status(200).json({ userId: request.auth!.context.userId });
+      });
+      return app;
+    }
+
+    it('rejects an unauthenticated request with HTTP 401', async () => {
+      const res = await request(appWithProtectedRoute()).get('/protected');
       expect(res.status).toBe(401);
+      expect(res.body.error.code).toBe('unauthenticated');
+    });
+
+    it('allows a request carrying a valid session cookie', async () => {
+      const rawToken = 'valid-protected-token';
+      new SessionRepository(db).create({
+        tokenHash: hashSessionToken(rawToken),
+        tenantId: 'tenant-acme',
+        userId: 'user-acme-alice',
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      });
+
+      const res = await request(appWithProtectedRoute())
+        .get('/protected')
+        .set('Cookie', `${SESSION_COOKIE_NAME}=${rawToken}`);
+      expect(res.status).toBe(200);
+      expect(res.body.userId).toBe('user-acme-alice');
     });
   });
 });

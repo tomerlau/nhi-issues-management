@@ -1,7 +1,7 @@
 # Project Assumptions
 
 This document records the assumptions and tradeoffs relevant to the
-functionality implemented through the current milestone (Milestone 3). It grows
+functionality implemented through the current milestone (Milestone 4). It grows
 cumulatively as later milestones add functionality.
 
 ## Scope
@@ -11,6 +11,8 @@ cumulatively as later milestones add functionality.
 - Milestone 1 established the project foundation.
 - Milestone 2 adds persistence, the tenant/user data model, and tenant isolation.
 - Milestone 3 adds backend-only application authentication.
+- Milestone 4 adds the frontend authenticated application shell on top of the
+  Milestone 3 backend, without changing the backend authentication contract.
 - The optional blog digest is not part of the current implementation.
 
 ## Frontend
@@ -19,6 +21,11 @@ cumulatively as later milestones add functionality.
 - A separate frontend application.
 - Communicates with the backend only over relative `/api` requests, forwarded by
   the Vite development proxy.
+- The frontend relies entirely on the server-managed `HttpOnly` cookie session.
+  It stores no session token, authorization header, or password in
+  `localStorage`, `sessionStorage`, the URL, or logs, and derives the
+  authenticated user only from the backend session response. There is no UI to
+  select or override a user or tenant id.
 
 ## Backend
 
@@ -124,9 +131,18 @@ cumulatively as later milestones add functionality.
     same database file, but do not support horizontal scaling.
 - **Raw session tokens are stored only in HttpOnly cookies.** The database stores
   only each token's SHA-256 hash, so a leaked database row cannot be replayed as a
-  session. Tokens carry 256 bits of entropy.
+  session. Tokens carry 256 bits of entropy. The frontend never reads or stores
+  the token; the browser sends the cookie automatically on same-origin `/api`
+  requests.
 - **Secure cookies depend on the environment.** The `Secure` cookie attribute is
   enabled when `NODE_ENV=production` and disabled for local HTTP development.
+- **Session restoration is a normal HTTP 200 state.** `GET /api/auth/session`
+  returns HTTP 200 with `{ user: null }` when there is no valid session, so an
+  unauthenticated initial load is not a request failure. Genuine protected routes
+  and invalid login credentials still return HTTP 401. The frontend renders the
+  login screen from `{ user: null }` and treats a network or unexpected server
+  failure during restoration as a retryable error, not as being logged out.
 - **Deferred:** registration, password reset or change, SSO and social login,
-  roles and permissions, API keys, tenant administration, rate limiting, account
-  lockout, and production/distributed session infrastructure.
+  roles and permissions, API keys, tenant selection and administration, frontend
+  routing, rate limiting, account lockout, and production/distributed session
+  infrastructure.
