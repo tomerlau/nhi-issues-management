@@ -29,6 +29,46 @@ describe('resolveJiraEncryptionKey', () => {
     );
   });
 
+  it('throws for an invalid base64 character', () => {
+    // A correct-length canonical key with one character replaced by '-', which
+    // is not part of the standard base64 alphabet.
+    const valid = randomBytes(32).toString('base64');
+    const invalid = `${valid.slice(0, -2)}-=`;
+    expect(() => resolveJiraEncryptionKey({ [JIRA_ENCRYPTION_KEY_ENV]: invalid })).toThrow(
+      JiraKeyConfigurationError,
+    );
+  });
+
+  it('throws for trailing garbage after valid base64', () => {
+    const raw = `${randomBytes(32).toString('base64')}garbage`;
+    expect(() => resolveJiraEncryptionKey({ [JIRA_ENCRYPTION_KEY_ENV]: raw })).toThrow(
+      JiraKeyConfigurationError,
+    );
+  });
+
+  it('throws for whitespace embedded inside the encoded value', () => {
+    const valid = randomBytes(32).toString('base64');
+    const withSpace = `${valid.slice(0, 8)} ${valid.slice(8)}`;
+    expect(() => resolveJiraEncryptionKey({ [JIRA_ENCRYPTION_KEY_ENV]: withSpace })).toThrow(
+      JiraKeyConfigurationError,
+    );
+  });
+
+  it('throws for malformed padding', () => {
+    // Extra padding that does not correspond to a canonical encoding.
+    const raw = `${randomBytes(32).toString('base64')}=`;
+    expect(() => resolveJiraEncryptionKey({ [JIRA_ENCRYPTION_KEY_ENV]: raw })).toThrow(
+      JiraKeyConfigurationError,
+    );
+  });
+
+  it('trims surrounding whitespace around an otherwise valid key', () => {
+    const raw = randomBytes(32).toString('base64');
+    const key = resolveJiraEncryptionKey({ [JIRA_ENCRYPTION_KEY_ENV]: `  ${raw}\n` });
+    expect(key).not.toBeNull();
+    expect(key!.length).toBe(32);
+  });
+
   it('does not include the key value in the thrown error', () => {
     const raw = randomBytes(8).toString('base64');
     try {

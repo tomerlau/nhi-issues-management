@@ -70,6 +70,18 @@ describe('jira token cipher', () => {
     expect(serialized).not.toContain(plaintext);
   });
 
+  it('does not collide AAD when ids contain the delimiter character', () => {
+    // With a naive ':'-joined AAD, tenantId 'a:b' + userId 'c' and tenantId 'a'
+    // + userId 'b:c' both serialize to '...:a:b:c', so a ciphertext for one
+    // owner could be decrypted as the other. The unambiguous encoding must keep
+    // these two ownership contexts distinct.
+    const first: CredentialContext = { tenantId: 'a:b', userId: 'c' };
+    const second: CredentialContext = { tenantId: 'a', userId: 'b:c' };
+    const serialized = encryptToken(plaintext, key, first);
+    expect(decryptToken(serialized, key, first)).toBe(plaintext);
+    expect(() => decryptToken(serialized, key, second)).toThrow();
+  });
+
   it('rejects a key that is not 32 bytes', () => {
     expect(() => encryptToken(plaintext, randomBytes(16), owner)).toThrow();
   });

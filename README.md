@@ -31,6 +31,10 @@ Implemented:
 - A small, focused Jira credential verifier that calls
   `GET {siteUrl}/rest/api/3/myself` with Jira Cloud Basic authentication over an
   injectable HTTP transport, with an explicit timeout and no redirect following.
+  The credential must be an **unscoped** Atlassian API token. Scoped API tokens
+  are **not** supported: they must be sent to `https://api.atlassian.com/ex/jira/<cloudId>`
+  rather than the direct `https://<site>.atlassian.net` origin this POC validates
+  against, so a scoped token will fail verification here.
 - AES-256-GCM encryption of the API token with a fresh random nonce and
   additional authenticated data bound to the credential type/version and the
   owning `(tenantId, userId)`, using an environment-provided 32-byte key.
@@ -326,10 +330,13 @@ fragments, IP addresses, `localhost`, multi-label hosts, and malformed URLs.
 
 ### Manual Jira validation
 
-These steps require a real Jira Cloud site, account email, and
-[API token](https://id.atlassian.com/manage-profile/security/api-tokens). They
-were **not** executed as part of building this milestone (no live Jira call was
-made); run them yourself to validate end to end.
+These steps require a real Jira Cloud site, account email, and an **unscoped**
+[API token](https://id.atlassian.com/manage-profile/security/api-tokens) (create
+the token without selecting any scopes). Scoped tokens are not supported by this
+POC, because they target `https://api.atlassian.com/ex/jira/<cloudId>` instead of
+the direct site origin. These steps were **not** executed as part of building
+this milestone (no live Jira call was made); run them yourself to validate end to
+end.
 
 ```bash
 # 1. Generate and export a key, then start the API with Jira configured.

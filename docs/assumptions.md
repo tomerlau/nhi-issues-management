@@ -151,6 +151,14 @@ cumulatively as later milestones add functionality.
 - **Jira Cloud only.** Only direct `https://<site>.atlassian.net` URLs are
   supported; the URL is validated and normalized to its HTTPS origin before any
   network call (SSRF boundary).
+- **Unscoped API tokens only.** The submitted credential must be an unscoped
+  Atlassian API token used with Jira Cloud Basic authentication against the
+  direct site origin. Scoped API tokens are intentionally **not** supported:
+  Atlassian requires scoped tokens to be sent to
+  `https://api.atlassian.com/ex/jira/<cloudId>` (a different host that needs
+  cloud-id resolution), which is outside this POC's direct-origin model, so a
+  scoped token fails verification. OAuth 2.0 / 3LO remains documented only as the
+  production alternative below, not an implemented option.
 - **One connection per application user,** owned by the `(tenantId, userId)`
   pair and reachable only within that scope.
 - **Credentials are validated before persistence.** The token is verified

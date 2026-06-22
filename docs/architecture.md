@@ -230,13 +230,20 @@ for M7 (see below). It validates the submitted site URL first
 origins; this is the SSRF boundary, so no network request is made until
 validation succeeds. It then calls `GET {origin}/rest/api/3/myself` with Jira
 Cloud Basic authentication, building the `Authorization` header only in memory
-for the outbound request — never persisted, never logged. The HTTP transport is
-injected, so tests never reach live Jira. Redirects are not followed, an explicit
-timeout bounds the call, and the JSON response shape is validated at runtime: a
-success must carry a non-empty `accountId` (the submitted email is stored as the
-username, since Jira may hide the account email). Every failure is mapped to a
-sanitized outcome — rejected credentials, timeout, or unavailable — and never
-exposes raw Jira bodies, network errors, or redirect destinations.
+for the outbound request — never persisted, never logged. The credential is an
+**unscoped** Atlassian API token; scoped tokens are not supported, because they
+must be sent to `https://api.atlassian.com/ex/jira/<cloudId>` rather than the
+direct `https://<site>.atlassian.net` origin this verifier targets, so they fail
+here. The HTTP transport is injected, so tests never reach live Jira. Redirects
+are not followed, and an explicit timeout bounds the *entire* response lifecycle:
+the abort stays armed across the request, the status check, and the full body
+read, and is cleared only once the whole operation finishes, so a stall while
+reading the body maps to `timeout` rather than `unavailable`. The JSON response
+shape is validated at runtime: a success must carry a non-empty `accountId` (the
+submitted email is stored as the username, since Jira may hide the account
+email). Every failure is mapped to a sanitized outcome — rejected credentials,
+timeout, or unavailable — and never exposes raw Jira bodies, network errors, or
+redirect destinations.
 
 ### Encryption at rest
 
@@ -246,9 +253,16 @@ value is a versioned, dot-separated format (`v1.<nonce>.<ciphertext>.<authTag>`)
 Additional authenticated data binds the ciphertext to the credential
 type/version and the owning `(tenantId, userId)`, so a stored value cannot be
 moved to a different owner and decrypted, and any tampering fails the
-authentication tag. The 32-byte key comes from
-`JIRA_CREDENTIAL_ENCRYPTION_KEY` (base64), resolved at startup in
-`config/jira-crypto.ts`: a malformed key fails startup with a sanitized error,
+authentication tag. The AAD is encoded as a fixed-order JSON array rather than a
+delimiter-joined string, so a field value that itself contains the delimiter can
+never forge a field boundary (e.g. tenant `a:b`/user `c` and tenant `a`/user
+`b:c` produce distinct AAD). The 32-byte key comes from
+`JIRA_CREDENTIAL_ENCRYPTION_KEY` (canonical standard base64), resolved at startup
+in `config/jira-crypto.ts`. Decoding is strict: the value must match the standard
+base64 alphabet with valid padding and re-encode back to exactly the input (which
+rejects invalid characters, embedded whitespace, trailing garbage, and malformed
+padding that `Buffer.from(_, 'base64')` would otherwise silently ignore) and
+decode to exactly 32 bytes. A malformed key fails startup with a sanitized error,
 while a missing key leaves the rest of the application running and makes the Jira
 endpoints return HTTP 503 `jira_not_configured`. The key is never logged or
 echoed in any error. The token is write-only in this milestone; nothing decrypts
@@ -263,6 +277,21 @@ there is no shared transport abstraction, no project discovery, and no ticket
 operations. M7 owns the reusable Jira integration layer; introducing that
 abstraction now would add indirection with no payoff and risk hiding the focused
 SSRF and credential-handling logic this milestone depends on.
+
+### Terminal error handling
+
+`app.ts` registers two error-handling middlewares after all routes. The first
+translates body-parser failures (malformed JSON, payload too large) into the same
+structured 400 `invalid_request` shape the routes use. The second is a terminal
+catch-all for any unexpected error that escapes a route (for example an
+asynchronous rejection forwarded by `.catch(next)`): if the response has already
+started it delegates to Express, otherwise it returns a stable, opaque
+HTTP 500 `{ "error": { "code": "internal_error", "message": "An unexpected error occurred." } }`.
+It deliberately leaks nothing about the failure — no error message, stack,
+dependency or database detail, request body, cookie, or credential — and logs
+nothing about the error. Both handlers set `Cache-Control: no-store` for
+`/api/auth` and `/api/jira` paths so error responses on credential-bearing routes
+are never cached.
 
 ### Why no ORM or generic repository layer
 

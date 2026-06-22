@@ -29,9 +29,18 @@ export interface CredentialContext {
   userId: string;
 }
 
+/**
+ * Build the additional authenticated data. The fields are encoded as a JSON
+ * array with a fixed element order so the boundaries between them are
+ * unambiguous. A delimiter-joined string (e.g. `a:b:c`) is ambiguous because a
+ * field value may itself contain the delimiter — tenantId `a:b` + userId `c`
+ * and tenantId `a` + userId `b:c` would produce identical AAD and could be
+ * substituted for one another. JSON string encoding escapes the contents so no
+ * field value can ever forge a boundary.
+ */
 function buildAad(context: CredentialContext): Buffer {
   return Buffer.from(
-    `${CREDENTIAL_TYPE}:${CREDENTIAL_VERSION}:${context.tenantId}:${context.userId}`,
+    JSON.stringify([CREDENTIAL_TYPE, CREDENTIAL_VERSION, context.tenantId, context.userId]),
     'utf8',
   );
 }

@@ -25,3 +25,12 @@ export function invalidCredentialsError(): ApiError {
 export function unauthenticatedError(): ApiError {
   return apiError('unauthenticated', 'Authentication required.');
 }
+
+/**
+ * Generic terminal error for unexpected failures. The message is deliberately
+ * opaque so internal details (stack traces, dependency errors, secrets) never
+ * reach the client.
+ */
+export function internalError(): ApiError {
+  return apiError('internal_error', 'An unexpected error occurred.');
+}

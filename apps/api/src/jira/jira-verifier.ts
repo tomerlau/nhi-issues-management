@@ -52,41 +52,53 @@ export async function verifyJiraCredentials(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
 
-  let response: Response;
+  // A single try/finally keeps the timeout active across the entire operation —
+  // the request, the status evaluation, and the full body read — and clears it
+  // only once everything has finished. A timeout that fires while the body is
+  // still being read therefore maps to `timeout`, not `unavailable`.
   try {
-    response = await options.fetch(endpoint, {
-      method: 'GET',
-      headers: { Authorization: authorization, Accept: 'application/json' },
-      // Do not follow arbitrary redirects to other hosts.
-      redirect: 'manual',
-      signal: controller.signal,
-    });
-  } catch (error) {
-    return { ok: false, reason: isAbortError(error) ? 'timeout' : 'unavailable' };
+    let response: Response;
+    try {
+      response = await options.fetch(endpoint, {
+        method: 'GET',
+        headers: { Authorization: authorization, Accept: 'application/json' },
+        // Do not follow arbitrary redirects to other hosts.
+        redirect: 'manual',
+        signal: controller.signal,
+      });
+    } catch (error) {
+      return {
+        ok: false,
+        reason: isAbortError(error) || controller.signal.aborted ? 'timeout' : 'unavailable',
+      };
+    }
+
+    if (response.status === 401 || response.status === 403) {
+      return { ok: false, reason: 'credentials_rejected' };
+    }
+    // Anything that is not a 2xx success (including 3xx redirects, which are not
+    // followed, and opaque redirect responses with status 0) is upstream failure.
+    if (response.status < 200 || response.status >= 300) {
+      return { ok: false, reason: 'unavailable' };
+    }
+
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch (error) {
+      return {
+        ok: false,
+        reason: isAbortError(error) || controller.signal.aborted ? 'timeout' : 'unavailable',
+      };
+    }
+
+    const accountId = extractAccountId(body);
+    if (accountId === null) {
+      return { ok: false, reason: 'unavailable' };
+    }
+
+    return { ok: true, accountId };
   } finally {
     clearTimeout(timeout);
   }
-
-  if (response.status === 401 || response.status === 403) {
-    return { ok: false, reason: 'credentials_rejected' };
-  }
-  // Anything that is not a 2xx success (including 3xx redirects, which are not
-  // followed, and opaque redirect responses with status 0) is upstream failure.
-  if (response.status < 200 || response.status >= 300) {
-    return { ok: false, reason: 'unavailable' };
-  }
-
-  let body: unknown;
-  try {
-    body = await response.json();
-  } catch {
-    return { ok: false, reason: 'unavailable' };
-  }
-
-  const accountId = extractAccountId(body);
-  if (accountId === null) {
-    return { ok: false, reason: 'unavailable' };
-  }
-
-  return { ok: true, accountId };
 }

@@ -7,7 +7,7 @@ import express, {
 import type { DatabaseSync } from 'node:sqlite';
 import { AuthService } from './auth/auth-service.js';
 import { createAuthRouter } from './auth/auth-routes.js';
-import { invalidRequestError } from './auth/errors.js';
+import { internalError, invalidRequestError } from './auth/errors.js';
 import { createJiraRouter } from './jira/jira-routes.js';
 import type { FetchLike } from './jira/jira-verifier.js';
 
@@ -89,6 +89,21 @@ export function createApp(db: DatabaseSync, options: AppOptions = {}): Express {
       return;
     }
     next(error);
+  });
+
+  // Terminal handler for any unexpected error. It returns a stable, opaque
+  // contract and never leaks internal detail (error messages, stacks,
+  // dependency or database errors, request bodies, cookies, or credentials).
+  // Nothing about the error is logged here.
+  app.use((error: unknown, request: Request, response: Response, next: NextFunction) => {
+    if (response.headersSent) {
+      next(error);
+      return;
+    }
+    if (request.path.startsWith('/api/auth') || request.path.startsWith('/api/jira')) {
+      response.setHeader('Cache-Control', 'no-store');
+    }
+    response.status(500).json(internalError());
   });
 
   return app;

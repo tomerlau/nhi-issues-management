@@ -373,6 +373,43 @@ describe('jira connection endpoints', () => {
     });
   });
 
+  describe('terminal error handling', () => {
+    const SENTINEL = 'SENTINEL-SECRET-9c3f-do-not-leak';
+
+    it('maps an unexpected exception to a sanitized 500 without leaking detail', async () => {
+      // The verifier reads `response.status` outside its try/catch, so a getter
+      // that throws produces an unexpected rejection that escapes the route and
+      // reaches the terminal error handler. The thrown message carries a
+      // sentinel secret that must never appear in the response.
+      const fetch = vi.fn(
+        async () =>
+          ({
+            get status(): number {
+              throw new Error(`boom ${SENTINEL}`);
+            },
+            json: async () => ({}),
+          }) as unknown as Response,
+      ) as unknown as FetchLike;
+      const app = appWith(db, { encryptionKey, fetch });
+      const agent = await loginAgent(app, acmeAlice);
+
+      const res = await agent
+        .post('/api/jira/connection')
+        .send({ siteUrl: VALID_SITE, email: acmeAlice.email, apiToken: VALID_TOKEN });
+
+      expect(res.status).toBe(500);
+      expect(res.body).toEqual({
+        error: { code: 'internal_error', message: 'An unexpected error occurred.' },
+      });
+      expect(res.headers['cache-control']).toBe('no-store');
+
+      const serialized = JSON.stringify(res.body);
+      expect(serialized).not.toContain(SENTINEL);
+      expect(serialized.toLowerCase()).not.toContain('stack');
+      expect(serialized).not.toContain('boom');
+    });
+  });
+
   describe('not configured', () => {
     it('returns 503 for GET and POST when no encryption key is configured', async () => {
       const app = appWith(db, { encryptionKey: null, fetch: okFetch() });

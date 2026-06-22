@@ -101,4 +101,27 @@ describe('jira credential verifier', () => {
     });
     expect(result).toEqual({ ok: false, reason: 'unavailable' });
   });
+
+  it('maps a timeout during the body read to timeout (lifecycle is covered)', async () => {
+    // The transport resolves headers (status 200) promptly, but reading the body
+    // hangs until the request times out. Because the timeout covers the entire
+    // response lifecycle, the abort fires while `.json()` is pending and the
+    // outcome must be `timeout`, not `unavailable`.
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const signal = init?.signal;
+      const json = () =>
+        new Promise((_resolve, reject) => {
+          if (signal) {
+            signal.addEventListener('abort', () => reject(new Error('body read aborted')));
+          }
+        });
+      return { status: 200, json } as unknown as Response;
+    }) as unknown as FetchLike;
+
+    const result = await verifyJiraCredentials(origin, 'a@example.com', 'token', {
+      fetch: fetchMock,
+      timeoutMs: 5,
+    });
+    expect(result).toEqual({ ok: false, reason: 'timeout' });
+  });
 });
