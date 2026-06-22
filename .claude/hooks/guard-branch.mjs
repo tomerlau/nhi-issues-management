@@ -7,19 +7,12 @@
 //
 // Contract: exit 0 allows the tool call; exit 2 blocks it and feeds stderr back
 // to Claude. The hook fails closed: if branch detection throws, it blocks.
+//
+// Branch detection is cwd-relative (see git-info.mjs), so this behaves correctly
+// when Claude runs inside a linked worktree.
 
-import { spawnSync } from 'node:child_process';
 import { decideBranchEdit } from './branch-decision.mjs';
-
-function currentBranch() {
-  const result = spawnSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
-    encoding: 'utf8',
-  });
-  if (result.status !== 0 || typeof result.stdout !== 'string') {
-    return null;
-  }
-  return result.stdout.trim();
-}
+import { currentBranch } from './git-info.mjs';
 
 function main() {
   let branch;

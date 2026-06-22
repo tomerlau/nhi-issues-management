@@ -60,6 +60,27 @@ backend only over relative `/api` requests via the Vite dev proxy.
 - Never expose secrets, credentials, tokens, API keys, passwords, sessions, or
   authorization headers in code, logs, tests, or generated text.
 
+## Parallel work with worktrees
+
+The repository supports running two independent Claude sessions in parallel
+using Git worktrees. These rules are stable; milestone-specific details never
+belong here.
+
+- At most two implementation worktrees may be active for the parallel workflow.
+- Prepare worktrees only with the `prepare-parallel-worktrees` skill, run from
+  the primary checkout.
+- Each Claude session operates **only** inside the worktree directory it was
+  started from. Never edit, run package-installing commands in, remove, clean,
+  reset, or otherwise modify another worktree.
+- Do not create additional worktrees during milestone implementation.
+- The primary checkout is the coordination checkout: it must stay clean and on
+  `main`.
+- Each worktree has its own independent branch, tests, documentation, review,
+  and completion decision.
+- Worktrees never permit ignoring milestone dependencies or scope.
+- Worktree removal and cleanup belong to the developer. Never remove, prune,
+  repair, move, lock, or unlock a worktree.
+
 ## Language
 
 All repository code, comments, documentation, command examples, and generated

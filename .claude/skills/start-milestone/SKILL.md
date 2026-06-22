@@ -17,7 +17,55 @@ do NOT create another branch. Stay on the existing `milestone/<n>-<slug>` branch
   branch name `milestone/<number>-<short-kebab-case-slug>`. Derive the slug from
   the approved milestone title if it was not given explicitly.
 
-## Steps
+## Choosing a mode
+
+This skill runs in one of two modes. Decide first:
+
+1. Inspect the current checkout:
+   - `git rev-parse --abbrev-ref HEAD` (branch; `HEAD` means detached)
+   - `git rev-parse --absolute-git-dir` and
+     `git rev-parse --path-format=absolute --git-common-dir`
+2. If the two git dirs are **equal**, this is the **primary checkout** → run
+   **Normal mode**.
+3. If they **differ**, this is a **linked worktree** → run **Prepared-worktree
+   mode**.
+
+`decideStartMode` in `.claude/hooks/worktree-decision.mjs` encodes this rule
+(primary checkout → normal, linked worktree → prepared).
+
+Never infer milestone scope from the branch name in either mode; scope comes
+only from the approved task prompt.
+
+## Normal mode (primary checkout)
+
+Prepare an updated main and a fresh milestone branch, then load context. Follow
+the steps below exactly as written.
+
+## Prepared-worktree mode (linked worktree)
+
+The worktree was already created by `prepare-parallel-worktrees` from the
+correct base commit. Do **not** switch to main, pull main, or create another
+branch. Instead validate and report:
+
+1. The working tree is clean: `git status --porcelain` is empty. If not, STOP.
+2. HEAD is not detached (the branch from `git branch --show-current` is a real
+   branch, not empty/`HEAD`).
+3. The active branch exactly equals the approved
+   `milestone/<number>-<slug>` branch. If it differs, STOP and report a branch
+   mismatch — do not guess scope from the branch name.
+4. The active checkout is **not** the primary `main` checkout (already confirmed
+   by the linked-worktree detection above).
+5. The branch is registered in `git worktree list --porcelain`.
+
+`validatePreparedWorktree` in `.claude/hooks/worktree-decision.mjs` encodes
+these checks. If any fails, STOP and report; never delete, reset, clean, or
+recreate anything.
+
+Then capture and report the current base commit (`git rev-parse HEAD`), load
+the normal repository context (the **Load context** section), summarize (the
+**Summarize** section), and stop. Do not begin implementation.
+
+## Steps (Normal mode)
 
 1. Inspect state: run `git status --porcelain` and `git branch --show-current`.
 2. If there are any tracked or untracked local changes, STOP and report them.
