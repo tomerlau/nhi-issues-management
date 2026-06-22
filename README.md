@@ -772,6 +772,112 @@ Expected outcomes:
 Throughout, confirm the plaintext token never appears in stdout, logs, API
 responses, the SQLite `encrypted_token` field, generated files, or `git status`.
 
+## Ticket creation (Milestone 8)
+
+An authenticated user creates a Jira Cloud issue of the fixed **`Task`** type in a
+project, against the tenant's shared connection. This is the first ticket-creation
+flow; it is backend only.
+
+| Method & path        | Auth required | Purpose                                                       |
+| -------------------- | ------------- | ------------------------------------------------------------- |
+| `POST /api/tickets`  | yes (cookie)  | Create a fixed-`Task` Jira issue and record local provenance. |
+
+The response includes `Cache-Control: no-store`. The request body accepts only
+the three domain fields; `tenantId` and the creating `userId` are derived from the
+session, and any client-supplied `tenantId`, `userId`, `connectionId`, `siteUrl`,
+`issueType`, or ownership field is ignored.
+
+Request body:
+
+```json
+{
+  "projectKey": "ABC",
+  "title": "NHI finding: leaked service-account key",
+  "description": "A short description.\nInternal line breaks are preserved."
+}
+```
+
+Success (HTTP 201) returns only the Jira issue id and key:
+
+```json
+{ "issueId": "10500", "issueKey": "ABC-42" }
+```
+
+`projectKey` is trimmed, uppercased, and must match a conservative Jira
+project-key syntax; `title` (≤ 255 characters) and `description` (≤ 5000
+characters) must be non-empty after trimming, and the description's internal line
+breaks are preserved. The issue type is always the project's non-subtask `Task`
+type, never chosen by the request. No endpoint stores or returns the ticket title
+or description after creation — Jira is the source of truth — and no response ever
+includes credentials or raw Jira content.
+
+### Safe error behavior
+
+| Condition                                                | Status | Code                        |
+| -------------------------------------------------------- | ------ | --------------------------- |
+| Invalid request input                                    | 400    | `invalid_request`           |
+| Missing application session                              | 401    | `unauthenticated`           |
+| Tenant has no Jira connection                            | 409    | `jira_not_connected`        |
+| Project inaccessible to the tenant connection            | 422    | `jira_project_inaccessible` |
+| Project does not support the fixed `Task` issue type     | 422    | `jira_task_unsupported`     |
+| Jira rejected credentials / invalid response / upstream  | 502    | `jira_unreachable`          |
+| Jira request timed out                                   | 504    | `jira_timeout`              |
+| Encryption key absent or stored credential undecryptable | 503    | `jira_not_configured`       |
+| Jira created the issue but local provenance failed       | 500    | `internal_error`            |
+
+Unlike the connect-time endpoint (where rejected credentials return 422), a
+credential rejection during ticket creation maps to 502: the connection was
+verified at connect time, so a later rejection is treated as an upstream failure.
+
+The provenance row is written **only after** Jira confirms a successful creation.
+Jira creation and local persistence are sequential and not atomic: if Jira creates
+the issue but the provenance insert fails, the response is HTTP 500 and the
+already-created Jira issue may remain untracked locally. This is an approved POC
+tradeoff — see [docs/assumptions.md](docs/assumptions.md).
+
+### Manual ticket-creation validation
+
+These steps require a real Jira Cloud site, account email, an **unscoped** API
+token, and a project the account can create `Task` issues in. Connect first via
+`POST /api/jira/connection` (see [Jira connection](#jira-connection-milestone-5)),
+then:
+
+```bash
+# Log in as an Acme user and connect Jira (see the Jira connection section), then
+# create a ticket. tenant and creator come only from the session cookie.
+curl -i -b alice.cookies -X POST http://localhost:3001/api/tickets \
+  -H 'Content-Type: application/json' \
+  -d '{"projectKey":"ABC","title":"Leaked service-account key","description":"Found a leaked key.\nRotate immediately."}'
+
+# Client-supplied ownership fields are ignored: the row is still owned by the
+# session tenant/user and the session connection's site.
+curl -i -b alice.cookies -X POST http://localhost:3001/api/tickets \
+  -H 'Content-Type: application/json' \
+  -d '{"projectKey":"ABC","title":"t","description":"d","tenantId":"tenant-globex","userId":"user-globex-alice","siteUrl":"https://evil.atlassian.net","issueType":"Bug"}'
+
+# No connection -> 409; invalid input -> 400; unknown/inaccessible project -> 422.
+curl -i -b globex.cookies -X POST http://localhost:3001/api/tickets \
+  -H 'Content-Type: application/json' \
+  -d '{"projectKey":"ABC","title":"t","description":"d"}'
+```
+
+What to confirm:
+
+- **Happy path** → HTTP 201 with `{ issueId, issueKey }`, and the issue appears in
+  Jira as a `Task`.
+- **Ownership comes only from the session** → the stored provenance row records the
+  session tenant, the session user as creator, and the session connection's site,
+  never the spoofed values.
+- **No connection** → HTTP 409 `jira_not_connected` with no Jira call.
+- **Provenance stores no contents** → the row holds only identifiers; the title and
+  description never appear in the database, logs, or responses.
+
+```bash
+# Provenance rows hold identifiers only — no title, description, or token.
+sqlite3 apps/api/data/app.db \
+  'SELECT tenant_id, created_by_user_id, jira_site_url, jira_project_key, jira_issue_key FROM jira_ticket_provenance;'
+```
+
 ## Jira connection UI (Milestone 6)
 
 The authenticated application shell now includes a Jira connection panel
@@ -1060,8 +1166,8 @@ same-origin `nhi_session` cookie is sent automatically.
 │   │   │   ├── server.ts    # process startup, db init, listening
 │   │   │   ├── config/      # database path, env loading, Jira key resolution
 │   │   │   ├── database/    # connection factory, migrator, lifecycle, seed
-│   │   │   ├── jira/        # Jira connection routes, verifier, token cipher
-│   │   │   └── repositories/# tenant-scoped repositories (users, sessions, Jira)
+│   │   │   ├── jira/        # Jira connection + ticket routes, client, integration & ticket services, token cipher
+│   │   │   └── repositories/# tenant-scoped repositories (users, sessions, Jira connection, ticket provenance)
 │   │   └── test/            # backend Vitest tests
 │   └── web/                 # React + Vite frontend
 │       ├── src/
