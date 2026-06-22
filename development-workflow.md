@@ -116,14 +116,25 @@ The committed Claude Code configuration enforces the rules that can be automated
 - `.claude/hooks/guard-branch.mjs` (a `PreToolUse` hook) blocks file edits on
   `main`, `master`, a detached HEAD, or when the branch cannot be determined. It
   fails closed and uses the current worktree's branch.
-- `.claude/hooks/guard-bash.mjs` (a `PreToolUse` hook) gates Bash commands. On a
-  protected, detached, or unknown branch it fails closed, allowing only an
-  explicit allowlist of safe Git inspection commands and the exact approved
-  preparation commands (fetch, fast-forward pull, branch/worktree creation);
-  everything else — including `npm`, arbitrary `node`, output redirection,
-  pipelines, command substitution, and output-to-file Git flags — is blocked. It
-  also blocks malformed hook input. On a normal milestone branch it does not
-  restrict development commands.
+- `.claude/hooks/guard-bash.mjs` (a `PreToolUse` hook) gates Bash commands. It
+  resolves the repository context (active branch, whether the current checkout is
+  the primary checkout or a linked worktree, the primary checkout path, and the
+  current `HEAD` SHA) and injects it into the pure decision logic, which then
+  fails closed per state. On the primary checkout on `main` it allows safe Git
+  inspection, the exact main-update and milestone-branch-creation preparation
+  commands, and a single fully validated `git worktree add`. On `master`, a
+  linked worktree whose branch is protected/detached/unknown, a detached HEAD, or
+  an unknown/unreadable Git state it allows only safe inspection (plus the exact
+  `git switch main`/`git checkout main` recovery when the state is readable);
+  `npm`, arbitrary `node`, output redirection, pipelines, command substitution,
+  and output-to-file Git flags are blocked. `git worktree add` is governed by the
+  same strict validator in every state: it is accepted only from the primary
+  checkout on `main`, only when the base commit equals the current full `HEAD`
+  SHA, and only when the target is an absolute path outside the primary checkout
+  (never the primary checkout, a path nested inside it, or its `.git` directory),
+  so a milestone or linked-worktree session can never create a worktree and
+  cannot make `main` dirty. It also blocks malformed hook input. On a normal
+  milestone branch it does not restrict ordinary development commands.
 - `.claude/hooks/run-quality-gates.mjs` (a `Stop` hook) runs `git diff --check`
   and `npm run check` when relevant local changes exist, and blocks Claude from
   finishing while a required check fails.

@@ -40,6 +40,54 @@ export function currentBranch(cwd) {
 }
 
 /**
+ * Full HEAD commit SHA of the checkout that owns `cwd`.
+ * Returns `null` when git could not be queried (so callers can fail closed).
+ * @param {string} [cwd]
+ * @returns {string|null}
+ */
+export function headSha(cwd) {
+  const out = git(['rev-parse', 'HEAD'], cwd);
+  if (out === null) {
+    return null;
+  }
+  const sha = out.trim();
+  return sha === '' ? null : sha;
+}
+
+/**
+ * Working-tree top-level path of the checkout that owns `cwd`
+ * (`git rev-parse --show-toplevel`, absolute). `null` on failure.
+ * @param {string} [cwd]
+ * @returns {string|null}
+ */
+export function topLevel(cwd) {
+  const out = git(['rev-parse', '--show-toplevel'], cwd);
+  if (out === null) {
+    return null;
+  }
+  const path = out.trim();
+  return path === '' ? null : path;
+}
+
+/**
+ * Absolute path of the primary (main) checkout for this repository.
+ *
+ * `git worktree list` always reports the primary checkout first, so the first
+ * parsed entry is the primary checkout regardless of which worktree `cwd` is in.
+ * Returns `null` when git could not be queried.
+ *
+ * @param {string} [cwd]
+ * @returns {string|null}
+ */
+export function primaryWorktreePath(cwd) {
+  const list = worktreeList(cwd);
+  if (list === null || list.length === 0) {
+    return null;
+  }
+  return list[0].path;
+}
+
+/**
  * Per-worktree git directory (`git rev-parse --git-dir`, absolute).
  * @param {string} [cwd]
  * @returns {string|null}

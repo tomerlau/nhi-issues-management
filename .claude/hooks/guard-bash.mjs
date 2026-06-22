@@ -18,7 +18,13 @@
 
 import { readFileSync } from 'node:fs';
 import { decideBashCommand } from './bash-decision.mjs';
-import { currentBranch } from './git-info.mjs';
+import {
+  currentBranch,
+  isLinkedWorktree,
+  primaryWorktreePath,
+  gitCommonDir,
+  headSha,
+} from './git-info.mjs';
 
 function block(reason) {
   process.stderr.write(`${reason}\n`);
@@ -63,17 +69,34 @@ function readCommand() {
   return command;
 }
 
+// Resolve the repository context for the current working directory. Git
+// inspection is cwd-relative so linked worktrees report their own state. Any
+// helper that cannot read git returns null, which makes the decision logic fail
+// closed for state-dependent allowances.
+function gatherContext() {
+  const safe = (fn) => {
+    try {
+      return fn();
+    } catch {
+      return null;
+    }
+  };
+
+  const linked = safe(isLinkedWorktree); // true | false | null
+  return {
+    branch: safe(currentBranch),
+    isPrimaryCheckout: linked === null ? null : !linked,
+    primaryCheckoutPath: safe(primaryWorktreePath),
+    primaryGitDir: safe(gitCommonDir),
+    headSha: safe(headSha),
+  };
+}
+
 function main() {
   const command = readCommand();
+  const context = gatherContext();
 
-  let branch;
-  try {
-    branch = currentBranch();
-  } catch {
-    branch = null; // fail closed: treated as an unknown branch
-  }
-
-  const decision = decideBashCommand(command, branch);
+  const decision = decideBashCommand(command, context);
   if (decision.allowed) {
     process.exit(0);
   }

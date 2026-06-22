@@ -17,6 +17,15 @@ On a protected branch the Bash guard allows only safe Git inspection and the
 exact preparation commands listed below; any other shell command is blocked.
 Use Claude's own file tools (Read/Glob), not Bash, for filesystem inspection.
 
+The Bash guard independently enforces the safety of `git worktree add`: it is
+accepted only from the **primary checkout** while it is on **main**, only when
+the supplied base commit exactly equals the current full `HEAD` SHA, and only
+when the target is an **absolute path outside the primary checkout** (not the
+primary checkout itself, not nested inside it, and not its `.git` directory). A
+relative path, an abbreviated or stale SHA, or a path inside the primary
+checkout is blocked before Git runs. Resolve and pass absolute paths to satisfy
+this guard; do not rely on it as your only check.
+
 ## Inputs
 
 Exactly **two** approved milestone specifications, each with:
@@ -24,6 +33,13 @@ Exactly **two** approved milestone specifications, each with:
 - milestone number (a positive integer)
 - short kebab-case slug
 - target worktree path (outside the primary checkout's working tree)
+
+Before validating, resolve each target path to a **normalized absolute path**
+(collapse any `.`/`..` segments). Use those exact absolute paths everywhere
+below — in validation, in the final report, and in the `git worktree add`
+commands. Never pass a relative path to `git worktree add`; the Bash guard
+rejects relative paths, paths equal to or inside the primary checkout, and the
+primary checkout's `.git` directory.
 
 The branch name for each is built as `milestone/<number>-<slug>`.
 
@@ -62,11 +78,13 @@ rejects the request, including when:
    - `git pull --ff-only origin main` (if this fails, STOP — do not force or
      rebase)
 5. Verify the update: `git rev-parse main` must equal `git rev-parse origin/main`.
-6. Capture the exact base commit SHA once and reuse it for both worktrees. Run
-   `git rev-parse HEAD`, read the printed SHA, and substitute that literal value
-   into the `git worktree add` commands below. Do not use shell command
-   substitution (`$(...)`) or shell variables — each Bash call is a fresh shell,
-   and the Bash guard blocks command substitution on a protected branch.
+6. Capture the exact **full** base commit SHA once and reuse it for both
+   worktrees. Run `git rev-parse HEAD`, read the printed full SHA, and substitute
+   that literal value into the `git worktree add` commands below. Do not use
+   shell command substitution (`$(...)`) or shell variables — each Bash call is a
+   fresh shell, and the Bash guard blocks command substitution on a protected
+   branch. Do not abbreviate the SHA: the guard requires the base commit to equal
+   the current full `HEAD` SHA exactly.
 7. For each of the two branches, confirm it does not already exist:
    - `git branch --list "<branch>"` (local)
    - `git ls-remote --heads origin "<branch>"` (remote)
@@ -76,11 +94,15 @@ rejects the request, including when:
    - `evaluateWorktreePreparation` in `.claude/hooks/worktree-decision.mjs`
      captures the combined path/branch/worktree-limit preconditions.
 9. Create the worktrees **sequentially** (never concurrently), both from the
-   captured `BASE_SHA`, using exactly this form:
-   - `git worktree add -b "<branch-1>" "<path-1>" "<BASE_SHA>"`
-   - then `git worktree add -b "<branch-2>" "<path-2>" "<BASE_SHA>"`
-   - Do not add other flags, omit `-b`, or perform more than one operation in a
-     single command; the Bash guard rejects those variants.
+   captured full `BASE_SHA`, using exactly this form with the **normalized
+   absolute paths** resolved earlier:
+   - `git worktree add -b "<branch-1>" "<absolute-path-1>" "<BASE_SHA>"`
+   - then `git worktree add -b "<branch-2>" "<absolute-path-2>" "<BASE_SHA>"`
+   - Each path must be absolute and outside the primary checkout. Never pass a
+     relative path. Do not add other flags, omit `-b`, or perform more than one
+     operation in a single command; the Bash guard rejects those variants, a
+     relative path, an inside-primary path, or a SHA that is not the current full
+     `HEAD`.
 10. If the first worktree succeeds and the second fails, STOP and report the
     partial state. Do **not** delete the branch, remove the worktree, reset,
     clean, stash, or roll back. The developer owns cleanup.

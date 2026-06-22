@@ -33,6 +33,18 @@ function makeRepo(branch) {
   return root;
 }
 
+function headSha(cwd) {
+  return spawnSync('git', ['rev-parse', 'HEAD'], { cwd, env: gitEnv(), encoding: 'utf8' }).stdout.trim();
+}
+
+function porcelainStatus(cwd) {
+  return spawnSync('git', ['status', '--porcelain'], { cwd, env: gitEnv(), encoding: 'utf8' }).stdout.trim();
+}
+
+function currentBranchOf(cwd) {
+  return spawnSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd, env: gitEnv(), encoding: 'utf8' }).stdout.trim();
+}
+
 // Run the hook with raw stdin in a given cwd; returns the exit code.
 function runHook(stdin, cwd) {
   const res = spawnSync('node', [HOOK], { cwd, input: stdin, encoding: 'utf8' });
@@ -78,5 +90,66 @@ test('on a milestone branch, the hook allows normal development commands', () =>
     assert.equal(runHook(bashInput('node --test'), repo), 0);
   } finally {
     rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('a worktree add targeting inside the primary checkout is blocked before git runs', () => {
+  const repo = makeRepo('main');
+  try {
+    const sha = headSha(repo);
+    const inside = join(repo, 'child');
+    assert.equal(runHook(bashInput(`git worktree add -b milestone/4-foo ${inside} ${sha}`), repo), 2);
+    // The hook blocks the tool call, so git never runs and main stays clean.
+    assert.equal(porcelainStatus(repo), '');
+    assert.equal(currentBranchOf(repo), 'main');
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('a worktree add to an absolute sibling path with the exact HEAD SHA is accepted by the guard', () => {
+  const repo = makeRepo('main');
+  const sibling = mkdtempSync(join(tmpdir(), 'nhi-guard-sibling-'));
+  try {
+    const sha = headSha(repo);
+    const target = join(sibling, 'wt-4');
+    assert.equal(runHook(bashInput(`git worktree add -b milestone/4-foo ${target} ${sha}`), repo), 0);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+    rmSync(sibling, { recursive: true, force: true });
+  }
+});
+
+test('a worktree add with an abbreviated or wrong SHA is blocked on primary main', () => {
+  const repo = makeRepo('main');
+  const sibling = mkdtempSync(join(tmpdir(), 'nhi-guard-sha-'));
+  try {
+    const sha = headSha(repo);
+    const target = join(sibling, 'wt-4');
+    assert.equal(runHook(bashInput(`git worktree add -b milestone/4-foo ${target} ${sha.slice(0, 10)}`), repo), 2);
+    assert.equal(runHook(bashInput(`git worktree add -b milestone/4-foo ${target} ${'b'.repeat(40)}`), repo), 2);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+    rmSync(sibling, { recursive: true, force: true });
+  }
+});
+
+test('the same sibling worktree add is blocked when run from a linked worktree', () => {
+  const repo = makeRepo('main');
+  const linkedParent = mkdtempSync(join(tmpdir(), 'nhi-guard-linked-'));
+  const siblingParent = mkdtempSync(join(tmpdir(), 'nhi-guard-sib2-'));
+  const linked = join(linkedParent, 'tree');
+  try {
+    const sha = headSha(repo);
+    spawnSync('git', ['worktree', 'add', '-b', 'milestone/9-existing', linked, sha], { cwd: repo, env: gitEnv() });
+
+    const target = join(siblingParent, 'wt-4');
+    // From the linked worktree (which is on main only because we re-checkout),
+    // the command must be blocked because it is not the primary checkout.
+    assert.equal(runHook(bashInput(`git worktree add -b milestone/4-foo ${target} ${sha}`), linked), 2);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+    rmSync(linkedParent, { recursive: true, force: true });
+    rmSync(siblingParent, { recursive: true, force: true });
   }
 });

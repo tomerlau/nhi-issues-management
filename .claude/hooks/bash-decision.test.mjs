@@ -2,10 +2,22 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { classifyProtectedCommand, decideBashCommand } from './bash-decision.mjs';
 
-const allowedOnMain = (cmd) => decideBashCommand(cmd, 'main').allowed;
-const blockedOnMain = (cmd) => !decideBashCommand(cmd, 'main').allowed;
+const PRIMARY = '/repo/primary';
+const HEAD = 'a'.repeat(40);
 
-test('safe exact inspection commands are allowed on main', () => {
+// Primary checkout on main, with HEAD and primary paths resolved.
+const primaryMain = {
+  branch: 'main',
+  isPrimaryCheckout: true,
+  primaryCheckoutPath: PRIMARY,
+  primaryGitDir: `${PRIMARY}/.git`,
+  headSha: HEAD,
+};
+
+const allowedOnMain = (cmd) => decideBashCommand(cmd, primaryMain).allowed;
+const blockedOnMain = (cmd) => !decideBashCommand(cmd, primaryMain).allowed;
+
+test('safe exact inspection commands are allowed on primary main', () => {
   for (const cmd of [
     'git status',
     'git status --short',
@@ -84,7 +96,7 @@ test('unsupported git flags and subcommands are blocked on main', () => {
   assert.equal(blockedOnMain('git branch --list a b'), true);
 });
 
-test('exact approved preparation commands are allowed on main', () => {
+test('exact approved preparation commands are allowed on primary main', () => {
   for (const cmd of [
     'git fetch origin',
     'git pull --ff-only origin main',
@@ -92,18 +104,16 @@ test('exact approved preparation commands are allowed on main', () => {
     'git checkout main',
     'git switch -c milestone/4-foo',
     'git checkout -b milestone/5-bar-baz',
-    'git worktree add -b milestone/4-foo /tmp/wt-4 0123abc',
-    'git worktree add -b milestone/4-foo /tmp/wt-4 0123456789abcdef0123456789abcdef01234567',
   ]) {
     assert.equal(allowedOnMain(cmd), true, `expected allowed: ${cmd}`);
   }
 });
 
-test('quoted arguments in approved forms are allowed on main', () => {
+test('quoted arguments in approved forms are allowed on primary main', () => {
   for (const cmd of [
     'git switch -c "milestone/4-foo"',
     "git checkout -b 'milestone/5-bar-baz'",
-    'git worktree add -b "milestone/4-foo" "/tmp/wt-4" "0123abc"',
+    `git worktree add -b "milestone/4-foo" "/repo/wt-4" "${HEAD}"`,
     'git branch --list "milestone/4-foo"',
     'git ls-remote --heads origin "milestone/4-foo"',
   ]) {
@@ -112,8 +122,6 @@ test('quoted arguments in approved forms are allowed on main', () => {
 });
 
 test('mismatched or partial quotes do not match approved forms on main', () => {
-  // A token that still contains a quote after stripping one matched layer must
-  // not satisfy the exact milestone/SHA regexes.
   assert.equal(blockedOnMain('git switch -c "milestone/4-foo'), true);
   assert.equal(blockedOnMain("git switch -c 'milestone/4-foo\""), true);
 });
@@ -127,23 +135,128 @@ test('malformed preparation commands are blocked on main', () => {
   assert.equal(blockedOnMain('git switch -c milestone/0-foo'), true);
   assert.equal(blockedOnMain('git switch -c milestone/4-Foo'), true);
   assert.equal(blockedOnMain('git switch -c feature/x'), true);
-  assert.equal(blockedOnMain('git worktree add /tmp/x'), true);
-  assert.equal(blockedOnMain('git worktree add -b milestone/4-foo /tmp/wt notahex'), true);
-  assert.equal(blockedOnMain('git worktree add -b milestone/4-foo --force /tmp/wt 0123abc'), true);
 });
 
-test('destructive worktree commands are blocked on main', () => {
+// ---- git worktree add validation on primary main ---------------------------
+
+test('an absolute sibling worktree path with the exact HEAD SHA is allowed', () => {
+  assert.equal(allowedOnMain(`git worktree add -b milestone/4-foo /repo/wt-4 ${HEAD}`), true);
+  assert.equal(allowedOnMain(`git worktree add -b milestone/5-bar /other/place ${HEAD}`), true);
+});
+
+test('a relative worktree path is blocked', () => {
+  assert.equal(blockedOnMain(`git worktree add -b milestone/4-foo child ${HEAD}`), true);
+  assert.equal(blockedOnMain(`git worktree add -b milestone/4-foo ./child ${HEAD}`), true);
+  assert.equal(blockedOnMain(`git worktree add -b milestone/4-foo ../sibling ${HEAD}`), true);
+});
+
+test('a worktree target equal to the primary checkout is blocked', () => {
+  assert.equal(blockedOnMain(`git worktree add -b milestone/4-foo ${PRIMARY} ${HEAD}`), true);
+});
+
+test('a worktree target nested inside the primary checkout is blocked', () => {
+  assert.equal(blockedOnMain(`git worktree add -b milestone/4-foo ${PRIMARY}/inside ${HEAD}`), true);
+  assert.equal(blockedOnMain(`git worktree add -b milestone/4-foo ${PRIMARY}/a/b ${HEAD}`), true);
+});
+
+test('a path that normalizes back inside the primary checkout is blocked', () => {
+  assert.equal(blockedOnMain(`git worktree add -b milestone/4-foo ${PRIMARY}/x/../inside ${HEAD}`), true);
+});
+
+test('the primary checkout .git directory is blocked as a worktree target', () => {
+  assert.equal(blockedOnMain(`git worktree add -b milestone/4-foo ${PRIMARY}/.git ${HEAD}`), true);
+});
+
+test('Windows case-equivalent inside paths are blocked', () => {
+  const winCtx = {
+    branch: 'main',
+    isPrimaryCheckout: true,
+    primaryCheckoutPath: 'C:/Repo/Primary',
+    primaryGitDir: 'C:/Repo/Primary/.git',
+    headSha: HEAD,
+  };
+  // On Windows path comparison is case-insensitive, so this resolves inside.
+  const d = decideBashCommand(`git worktree add -b milestone/4-foo c:/repo/primary/inside ${HEAD}`, winCtx);
+  if (process.platform === 'win32') {
+    assert.equal(d.allowed, false);
+  } else {
+    // On a case-sensitive platform the differing case is genuinely outside.
+    assert.equal(d.allowed, true);
+  }
+});
+
+test('an abbreviated SHA is blocked for worktree creation', () => {
+  assert.equal(blockedOnMain(`git worktree add -b milestone/4-foo /repo/wt-4 ${HEAD.slice(0, 10)}`), true);
+  assert.equal(blockedOnMain('git worktree add -b milestone/4-foo /repo/wt-4 0123abc'), true);
+});
+
+test('a different full SHA is blocked for worktree creation', () => {
+  assert.equal(blockedOnMain(`git worktree add -b milestone/4-foo /repo/wt-4 ${'b'.repeat(40)}`), true);
+});
+
+test('malformed and destructive worktree commands remain blocked on main', () => {
+  assert.equal(blockedOnMain('git worktree add /tmp/x'), true);
+  assert.equal(blockedOnMain(`git worktree add -b milestone/4-foo /repo/wt notahex`), true);
+  assert.equal(blockedOnMain(`git worktree add -b milestone/4-foo --force /repo/wt ${HEAD}`), true);
   assert.equal(blockedOnMain('git worktree remove /tmp/wt'), true);
   assert.equal(blockedOnMain('git worktree prune'), true);
   assert.equal(blockedOnMain('git worktree move a b'), true);
 });
 
-test('detached HEAD and unknown branch use the same fail-closed allowlist', () => {
-  assert.equal(decideBashCommand('npm install', '').allowed, false);
-  assert.equal(decideBashCommand('git status', '').allowed, true);
-  assert.equal(decideBashCommand('npm install', null).allowed, false);
+// ---- state separation -------------------------------------------------------
+
+test('primary checkout on master allows inspection only', () => {
+  const masterPrimary = { branch: 'master', isPrimaryCheckout: true, primaryCheckoutPath: PRIMARY, headSha: HEAD };
+  assert.equal(decideBashCommand('git status', masterPrimary).allowed, true);
+  assert.equal(decideBashCommand('git fetch origin', masterPrimary).allowed, false);
+  assert.equal(decideBashCommand('git pull --ff-only origin main', masterPrimary).allowed, false);
+  assert.equal(decideBashCommand('git switch -c milestone/4-foo', masterPrimary).allowed, false);
+  assert.equal(decideBashCommand(`git worktree add -b milestone/4-foo /repo/wt-4 ${HEAD}`, masterPrimary).allowed, false);
+  // recovery to main is still permitted from another protected branch
+  assert.equal(decideBashCommand('git switch main', masterPrimary).allowed, true);
+});
+
+test('a linked worktree on a protected branch allows inspection only', () => {
+  const linkedMain = { branch: 'main', isPrimaryCheckout: false, primaryCheckoutPath: PRIMARY, headSha: HEAD };
+  assert.equal(decideBashCommand('git status', linkedMain).allowed, true);
+  assert.equal(decideBashCommand('git fetch origin', linkedMain).allowed, false);
+  assert.equal(decideBashCommand('git switch -c milestone/4-foo', linkedMain).allowed, false);
+  assert.equal(decideBashCommand(`git worktree add -b milestone/4-foo /repo/wt-4 ${HEAD}`, linkedMain).allowed, false);
+});
+
+test('a linked worktree on a milestone branch allows normal development', () => {
+  const linkedMilestone = { branch: 'milestone/4-foo', isPrimaryCheckout: false, primaryCheckoutPath: PRIMARY, headSha: HEAD };
+  assert.equal(decideBashCommand('npm install', linkedMilestone).allowed, true);
+  assert.equal(decideBashCommand('node --test', linkedMilestone).allowed, true);
+});
+
+test('detached HEAD allows inspection and recovery only', () => {
+  const detached = { branch: '', isPrimaryCheckout: true, primaryCheckoutPath: PRIMARY, headSha: HEAD };
+  assert.equal(decideBashCommand('git status', detached).allowed, true);
+  assert.equal(decideBashCommand('git switch main', detached).allowed, true);
+  assert.equal(decideBashCommand('git checkout main', detached).allowed, true);
+  assert.equal(decideBashCommand('git fetch origin', detached).allowed, false);
+  assert.equal(decideBashCommand('git pull --ff-only origin main', detached).allowed, false);
+  assert.equal(decideBashCommand('git switch -c milestone/4-foo', detached).allowed, false);
+  assert.equal(decideBashCommand(`git worktree add -b milestone/4-foo /repo/wt-4 ${HEAD}`, detached).allowed, false);
+});
+
+test('unknown Git state allows independently-safe inspection only', () => {
+  // branch null => state could not be read.
   assert.equal(decideBashCommand('git status', null).allowed, true);
-  assert.equal(decideBashCommand('node --test', 'HEAD').allowed, false);
+  assert.equal(decideBashCommand('git worktree list --porcelain', null).allowed, true);
+  assert.equal(decideBashCommand('git switch main', null).allowed, false);
+  assert.equal(decideBashCommand('git fetch origin', null).allowed, false);
+  assert.equal(decideBashCommand('npm install', null).allowed, false);
+  assert.equal(decideBashCommand(`git worktree add -b milestone/4-foo /repo/wt-4 ${HEAD}`, null).allowed, false);
+});
+
+test('preparation requires the primary checkout, not just being on main', () => {
+  // isPrimaryCheckout unknown (null) => fail closed for preparation.
+  const unknownPrimary = { branch: 'main', isPrimaryCheckout: null, primaryCheckoutPath: PRIMARY, headSha: HEAD };
+  assert.equal(decideBashCommand('git fetch origin', unknownPrimary).allowed, false);
+  assert.equal(decideBashCommand(`git worktree add -b milestone/4-foo /repo/wt-4 ${HEAD}`, unknownPrimary).allowed, false);
+  assert.equal(decideBashCommand('git status', unknownPrimary).allowed, true);
 });
 
 test('a normal milestone branch allows normal development commands', () => {
@@ -153,8 +266,10 @@ test('a normal milestone branch allows normal development commands', () => {
 });
 
 test('classifyProtectedCommand reports the category', () => {
-  assert.equal(classifyProtectedCommand('git status').category, 'inspection');
-  assert.equal(classifyProtectedCommand('git fetch origin').category, 'preparation');
-  assert.equal(classifyProtectedCommand('npm install').category, 'blocked');
-  assert.equal(classifyProtectedCommand('').category, 'blocked');
+  assert.equal(classifyProtectedCommand('git status', primaryMain).category, 'inspection');
+  assert.equal(classifyProtectedCommand('git fetch origin', primaryMain).category, 'preparation');
+  assert.equal(classifyProtectedCommand('git switch main', primaryMain).category, 'recovery');
+  assert.equal(classifyProtectedCommand(`git worktree add -b milestone/4-foo /repo/wt-4 ${HEAD}`, primaryMain).category, 'preparation');
+  assert.equal(classifyProtectedCommand('npm install', primaryMain).category, 'blocked');
+  assert.equal(classifyProtectedCommand('', primaryMain).category, 'blocked');
 });

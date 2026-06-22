@@ -12,13 +12,13 @@ export const PROTECTED_BRANCHES = ['main', 'master'];
 const MILESTONE_NUMBER = /^[1-9][0-9]*$/;
 const KEBAB_SLUG = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
-function platformCaseInsensitive() {
+export function platformCaseInsensitive() {
   return process.platform === 'win32';
 }
 
 // Collapse a path to a normalized form: forward slashes, no `.`/`..` segments,
 // no trailing slash. Preserves a POSIX root (`/…`) or a Windows drive (`C:/…`).
-function collapse(input) {
+export function collapse(input) {
   let s = String(input).replace(/\\/g, '/');
 
   let prefix = '';
@@ -54,7 +54,7 @@ function collapse(input) {
   return body;
 }
 
-function isAbsolute(s) {
+export function isAbsolute(s) {
   return s.startsWith('/') || /^[A-Za-z]:[\\/]/.test(s);
 }
 
@@ -67,11 +67,11 @@ function resolvePath(base, p) {
   return collapse(normalizedInput);
 }
 
-function canonical(resolved, caseInsensitive) {
+export function canonical(resolved, caseInsensitive) {
   return caseInsensitive ? resolved.toLowerCase() : resolved;
 }
 
-function isInside(parentCanonical, childCanonical) {
+export function isInside(parentCanonical, childCanonical) {
   return childCanonical !== parentCanonical && childCanonical.startsWith(`${parentCanonical}/`);
 }
 

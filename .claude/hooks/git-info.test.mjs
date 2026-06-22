@@ -8,6 +8,9 @@ import {
   currentBranch,
   isLinkedWorktree,
   worktreeList,
+  headSha,
+  topLevel,
+  primaryWorktreePath,
 } from './git-info.mjs';
 import { validateWorktreeRequest, verifyCreatedWorktrees } from './worktree-decision.mjs';
 
@@ -175,6 +178,39 @@ test('verifyCreatedWorktrees confirms two worktrees from the same base SHA', () 
   } finally {
     rmSync(root, { recursive: true, force: true });
     rmSync(sibling, { recursive: true, force: true });
+  }
+});
+
+test('headSha, topLevel and primaryWorktreePath resolve repository context', () => {
+  const { root, baseSha } = setupRepo();
+  const wtA = mkdtempSync(join(tmpdir(), 'nhi-wt-ctx-'));
+  const pathA = join(wtA, 'tree');
+  try {
+    git(['worktree', 'add', '-b', 'milestone/4-a', pathA, baseSha], root);
+
+    // HEAD SHA is the full base SHA from both the primary and the linked tree.
+    assert.equal(headSha(root), baseSha);
+    assert.equal(headSha(pathA), baseSha);
+
+    // top-level reflects the current checkout; the primary worktree path is the
+    // primary checkout regardless of which worktree we query from.
+    assert.equal(isLinkedWorktree(root), false);
+    assert.equal(isLinkedWorktree(pathA), true);
+
+    const primaryFromRoot = primaryWorktreePath(root);
+    const primaryFromLinked = primaryWorktreePath(pathA);
+    assert.equal(primaryFromRoot, primaryFromLinked);
+    // the primary path is the root checkout, not the linked worktree
+    assert.notEqual(primaryFromLinked.replace(/\\/g, '/'), pathA.replace(/\\/g, '/'));
+
+    // topLevel of the linked worktree is the linked path, not the primary.
+    assert.notEqual(
+      topLevel(pathA).replace(/\\/g, '/').toLowerCase(),
+      primaryFromLinked.replace(/\\/g, '/').toLowerCase(),
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(wtA, { recursive: true, force: true });
   }
 });
 
