@@ -9,6 +9,7 @@ import { AuthService } from './auth/auth-service.js';
 import { createAuthRouter } from './auth/auth-routes.js';
 import { internalError, invalidRequestError } from './auth/errors.js';
 import { createJiraRouter } from './jira/jira-routes.js';
+import { createTicketRouter } from './jira/ticket-routes.js';
 import type { FetchLike } from './jira/jira-verifier.js';
 
 export interface JiraAppOptions {
@@ -46,6 +47,15 @@ function isBodyParseError(error: unknown): error is BodyParseError {
   );
 }
 
+/** Paths whose error responses must carry Cache-Control: no-store. */
+function isCredentialBearingPath(path: string): boolean {
+  return (
+    path.startsWith('/api/auth') ||
+    path.startsWith('/api/jira') ||
+    path.startsWith('/api/tickets')
+  );
+}
+
 /**
  * Construct and configure the Express application. Process concerns (ports,
  * signals) live in server.ts; the database is injected so the full application
@@ -67,14 +77,29 @@ export function createApp(db: DatabaseSync, options: AppOptions = {}): Express {
   const authService = new AuthService(db);
   app.use('/api/auth', createAuthRouter(authService, { cookieSecure }));
 
+  const jiraEncryptionKey = options.jira?.encryptionKey ?? null;
+  const jiraFetch = options.jira?.fetch ?? globalThis.fetch;
+  const jiraTimeoutMs = options.jira?.timeoutMs;
+
   app.use(
     '/api/jira',
     createJiraRouter({
       db,
       authService,
-      encryptionKey: options.jira?.encryptionKey ?? null,
-      fetch: options.jira?.fetch ?? globalThis.fetch,
-      timeoutMs: options.jira?.timeoutMs,
+      encryptionKey: jiraEncryptionKey,
+      fetch: jiraFetch,
+      timeoutMs: jiraTimeoutMs,
+    }),
+  );
+
+  app.use(
+    '/api/tickets',
+    createTicketRouter({
+      db,
+      authService,
+      encryptionKey: jiraEncryptionKey,
+      fetch: jiraFetch,
+      timeoutMs: jiraTimeoutMs,
     }),
   );
 
@@ -82,7 +107,7 @@ export function createApp(db: DatabaseSync, options: AppOptions = {}): Express {
   // same structured 400 shape the routes use.
   app.use((error: unknown, request: Request, response: Response, next: NextFunction) => {
     if (isBodyParseError(error)) {
-      if (request.path.startsWith('/api/auth') || request.path.startsWith('/api/jira')) {
+      if (isCredentialBearingPath(request.path)) {
         response.setHeader('Cache-Control', 'no-store');
       }
       response.status(400).json(invalidRequestError('Request body could not be parsed.'));
@@ -100,7 +125,7 @@ export function createApp(db: DatabaseSync, options: AppOptions = {}): Express {
       next(error);
       return;
     }
-    if (request.path.startsWith('/api/auth') || request.path.startsWith('/api/jira')) {
+    if (isCredentialBearingPath(request.path)) {
       response.setHeader('Cache-Control', 'no-store');
     }
     response.status(500).json(internalError());

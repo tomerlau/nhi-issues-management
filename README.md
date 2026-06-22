@@ -2,11 +2,17 @@
 
 A focused proof of concept for integrating Oasis Security IdentityHub with Jira.
 
-This repository is built in milestones. The current milestone (Milestone 7)
-adds a backend-only Jira integration layer: one central Jira client and a
-tenant-scoped integration service that validates a Jira project against the
-authenticated tenant's shared connection. It also moves Jira credential
-encryption to a tenant-only v2 format and deletes the older v1 connections.
+This repository is built in milestones. The current milestone (Milestone 8)
+adds a backend-only ticket-creation domain service: an authenticated
+`POST /api/tickets` endpoint that creates a fixed-`Task` Jira Cloud issue against
+the tenant's shared connection and records minimal local provenance for the
+created issue. It builds on the Milestone 7 integration layer.
+
+Milestone 7 added the backend-only Jira integration layer this builds on: one
+central Jira client and a tenant-scoped integration service that validates a Jira
+project against the authenticated tenant's shared connection. It also moved Jira
+credential encryption to a tenant-only v2 format and deleted the older v1
+connections.
 
 Milestone 5 added the backend-only Jira API-token connection that this builds
 on: an authenticated user connects a Jira Cloud account by submitting a site

@@ -28,3 +28,24 @@ export function jiraUnreachableError(): ApiError {
 export function jiraTimeoutError(): ApiError {
   return apiError('jira_timeout', 'The Jira request timed out. Please try again.');
 }
+
+/** The tenant has no Jira connection, so a ticket cannot be created. */
+export function jiraNotConnectedError(): ApiError {
+  return apiError('jira_not_connected', 'No Jira connection is configured for this tenant.');
+}
+
+/** The requested project is not accessible to the tenant's Jira connection. */
+export function jiraProjectInaccessibleError(): ApiError {
+  return apiError(
+    'jira_project_inaccessible',
+    'The requested Jira project is not accessible.',
+  );
+}
+
+/** The requested project does not support the fixed Task issue type. */
+export function jiraTaskUnsupportedError(): ApiError {
+  return apiError(
+    'jira_task_unsupported',
+    'The requested Jira project does not support the Task issue type.',
+  );
+}

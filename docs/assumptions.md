@@ -1,7 +1,7 @@
 # Project Assumptions
 
 This document records the assumptions and tradeoffs relevant to the
-functionality implemented through the current milestone (Milestone 7). It grows
+functionality implemented through the current milestone (Milestone 8). It grows
 cumulatively as later milestones add functionality.
 
 ## Scope
@@ -20,6 +20,10 @@ cumulatively as later milestones add functionality.
   client and a tenant-scoped integration service that validates a Jira project
   against the authenticated tenant's shared connection, plus a move from v1 to
   tenant-only v2 credential encryption.
+- Milestone 8 adds a backend-only ticket-creation domain service: an
+  authenticated `POST /api/tickets` endpoint that creates a fixed-`Task` Jira
+  issue against the tenant's shared connection and records local provenance for
+  the created issue.
 - The optional blog digest is not part of the current implementation.
 
 ## Frontend
@@ -326,3 +330,66 @@ cumulatively as later milestones add functionality.
   recent-tickets view; a disconnect button; roles, permissions, or a
   tenant-admin UI; API-key functionality; browser credential persistence; global
   frontend state; and frontend routing.
+
+## Ticket creation domain service (Milestone 8)
+
+- **Backend only.** `POST /api/tickets` requires the existing application
+  session, returns `Cache-Control: no-store`, and accepts only `projectKey`,
+  `title`, and `description`. `tenantId` and the creating `userId` come solely
+  from the session; any client-supplied `tenantId`, `userId`, `connectionId`,
+  `siteUrl`, `issueType`, or ownership field is ignored. There is no frontend in
+  this milestone.
+- **Fixed Jira Cloud `Task` issues only.** The issue type is always the project's
+  non-subtask issue type named exactly `Task`, resolved by the Milestone 7
+  project-validation step; it is never chosen by request input. Configurable
+  issue types, custom fields, labels, components, assignees, and rich-text or
+  Markdown descriptions are out of scope. The description is sent as a minimal
+  Atlassian Document Format (ADF) document that preserves only internal line
+  breaks.
+- **Validation precedes any Jira call.** The body is fully validated first:
+  `projectKey` is trimmed, uppercased, and checked against a conservative Jira
+  project-key syntax and length bound; `title` and `description` are trimmed,
+  non-empty, and length-bounded, with internal line breaks preserved in the
+  description. No validation framework is introduced.
+- **One connection load drives both validation and creation.** The integration
+  service loads the tenant's shared connection once and uses a single short-lived
+  client for both project validation and issue creation, so a concurrent
+  connection replacement cannot split the two across different connections.
+  Cross-tenant access is impossible: a tenant without a connection receives
+  `not_connected` (HTTP 409) and makes no Jira call, even if another tenant is
+  connected.
+- **Local provenance stores only a minimal pointer; Jira is the source of
+  truth.** The `jira_ticket_provenance` row records identifiers and an audit
+  trail (provenance id, tenant id, creating user id, connection id, a site-URL
+  snapshot, project id/key, issue id/key, and a local timestamp) and deliberately
+  stores **no** ticket title, description, credential, or raw Jira response.
+  Mutable issue contents live in Jira, not the application.
+  - The `jira_site_url` is stored as a **snapshot** so the row keeps identifying
+    the issue's site even after the tenant replaces its connection (the row
+    retains its identity rather than following the connection's later site).
+  - A `UNIQUE (tenant_id, jira_site_url, jira_issue_id)` constraint prevents
+    recording the same issue twice for a tenant and site.
+- **Sequential creation, not a distributed transaction (approved POC choice).**
+  Jira creation and SQLite provenance persistence are sequential and not atomic,
+  and no pending record is written before Jira is called. If Jira creates the
+  issue but provenance persistence then fails, the result is `persistence_failed`
+  (HTTP 500) and the already-created Jira issue may remain untracked locally.
+  - **Production alternative:** a transactional outbox or a reconciliation
+    process that detects and links orphaned Jira issues, and/or an idempotency
+    key on creation to make retries safe.
+  - **Tradeoff:** the sequential flow keeps the POC small and avoids workers,
+    queues, idempotency keys, compensating deletion, and reconciliation, at the
+    cost of a narrow window in which a created Jira issue is not tracked locally.
+    Jira, not the application, remains authoritative, so an untracked issue is a
+    missing local pointer rather than lost data.
+- **Credential rejection during creation maps to 502, not 422.** The connection
+  was previously verified at connect time, so a later credential rejection is
+  treated as an upstream failure (`jira_unreachable`) rather than the connect-time
+  `jira_credentials_rejected` (422). A missing encryption key or an undecryptable
+  stored credential maps to HTTP 503 `jira_not_configured`.
+- **Deferred:** any frontend or ticket-creation UI; a recent-tickets list or
+  read/query endpoints; editing, deleting, or transitioning issues; external
+  application API-key authentication; Jira project discovery or search;
+  configurable issue types, custom fields, labels, components, or assignees;
+  idempotency keys, retries, workers, queues, reconciliation, compensating
+  deletion, and webhooks; and Jira Server / Data Center support.
