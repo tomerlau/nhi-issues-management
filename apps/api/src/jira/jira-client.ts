@@ -79,6 +79,35 @@ export interface CreateIssueInput {
 }
 
 /**
+ * One runtime-validated Jira issue hydrated by a bulk fetch. It carries only the
+ * minimal, current fields the recent-tickets flow needs: the immutable id, the
+ * current issue key, the current summary (title), the Jira creation timestamp,
+ * and the current project key (used to detect issues that moved to another
+ * project). No raw Jira body, self/redirect URL, or other field is exposed.
+ */
+export interface HydratedJiraIssue {
+  id: string;
+  key: string;
+  summary: string;
+  created: string;
+  projectKey: string;
+}
+
+/**
+ * Sanitized outcome of a single bulk fetch. On success it carries only the
+ * successfully hydrated, fully validated issues; requested issues that Jira
+ * omits (deleted, moved away, or inaccessible) are simply absent and are the
+ * caller's responsibility to treat as skipped. A 401 maps to
+ * `credentials_rejected`, a stall to `timeout`, and every other rejection — a
+ * redirect, rate limit, 5xx, network error, invalid JSON, or a malformed success
+ * shape (including a malformed individual issue) — collapses into `unavailable`.
+ * Individual Jira issue errors in the response are never read or exposed.
+ */
+export type BulkFetchResult =
+  | { ok: true; issues: HydratedJiraIssue[] }
+  | { ok: false; reason: 'credentials_rejected' | 'timeout' | 'unavailable' };
+
+/**
  * Sanitized low-level outcome of a single Jira request, with the body parsed on
  * success. The failure reasons are deliberately HTTP-shaped (`unauthorized` vs
  * `forbidden` kept distinct) so each public operation can apply its own contract:
@@ -170,6 +199,74 @@ function extractCreatedIssue(body: unknown): { id: string; key: string } | null 
     return null;
   }
   return { id: record.id, key: record.key };
+}
+
+/** The minimal Jira fields requested per issue in a bulk fetch. */
+const BULK_FETCH_FIELDS = ['summary', 'created', 'project'] as const;
+
+/**
+ * Validate a single hydrated issue's shape at runtime. Returns the sanitized
+ * issue or null on any deviation (missing/invalid id, key, summary, created, or
+ * project key). A malformed individual issue is treated by the caller as a
+ * malformed success response, not a trusted partial result.
+ */
+function parseHydratedIssue(value: unknown): HydratedJiraIssue | null {
+  if (typeof value !== 'object' || value === null) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  if (!isNonEmptyString(record.id) || !isNonEmptyString(record.key)) {
+    return null;
+  }
+  const fields = record.fields;
+  if (typeof fields !== 'object' || fields === null) {
+    return null;
+  }
+  const fieldRecord = fields as Record<string, unknown>;
+  if (!isNonEmptyString(fieldRecord.summary) || !isNonEmptyString(fieldRecord.created)) {
+    return null;
+  }
+  const project = fieldRecord.project;
+  if (typeof project !== 'object' || project === null) {
+    return null;
+  }
+  const projectKey = (project as Record<string, unknown>).key;
+  if (!isNonEmptyString(projectKey)) {
+    return null;
+  }
+  return {
+    id: record.id,
+    key: record.key,
+    summary: fieldRecord.summary,
+    created: fieldRecord.created,
+    projectKey,
+  };
+}
+
+/**
+ * Validate the complete bulk-fetch success response at runtime. The top-level
+ * `issues` array must be present; each present issue must validate fully (a
+ * single malformed issue invalidates the whole response). `issueErrors` and any
+ * other top-level field are intentionally ignored, so omitted issues are simply
+ * absent. Returns the validated issues, or null when the response is malformed.
+ */
+function parseBulkFetchBody(body: unknown): HydratedJiraIssue[] | null {
+  if (typeof body !== 'object' || body === null) {
+    return null;
+  }
+  const issues = (body as Record<string, unknown>).issues;
+  if (!Array.isArray(issues)) {
+    return null;
+  }
+  const hydrated: HydratedJiraIssue[] = [];
+  for (const item of issues) {
+    const issue = parseHydratedIssue(item);
+    if (issue === null) {
+      return null;
+    }
+    hydrated.push(issue);
+  }
+  return hydrated;
 }
 
 interface AdfNode {
@@ -319,6 +416,44 @@ export class JiraClient {
       return { ok: false, reason: 'unavailable' };
     }
     return { ok: true, issueId: created.id, issueKey: created.key };
+  }
+
+  /**
+   * Bulk-fetch issues by their immutable Jira issue ids
+   * (`POST /rest/api/3/issue/bulkfetch`) requesting only the minimal
+   * `summary`, `created`, and `project` fields. It sends exactly one request and
+   * runtime-validates the complete success response, returning only the fully
+   * hydrated issues. Jira may return them in any order and may omit deleted,
+   * moved, or inaccessible issues; the caller restores local order and treats
+   * omitted ids as skipped. A 401 maps to `credentials_rejected`, a stall to
+   * `timeout`, and every other rejection (redirect, rate limit, 5xx, network
+   * error, invalid JSON, or a malformed success shape) to `unavailable`. No raw
+   * Jira content or individual issue error ever escapes.
+   */
+  async bulkFetchIssues(issueIds: string[]): Promise<BulkFetchResult> {
+    const body = {
+      issueIdsOrKeys: issueIds,
+      fields: [...BULK_FETCH_FIELDS],
+    };
+    const outcome = await this.request('/rest/api/3/issue/bulkfetch', { method: 'POST', body });
+    if (!outcome.ok) {
+      switch (outcome.reason) {
+        case 'unauthorized':
+          return { ok: false, reason: 'credentials_rejected' };
+        case 'forbidden':
+        case 'not_found':
+        case 'unavailable':
+          return { ok: false, reason: 'unavailable' };
+        case 'timeout':
+          return { ok: false, reason: 'timeout' };
+      }
+    }
+
+    const issues = parseBulkFetchBody(outcome.body);
+    if (issues === null) {
+      return { ok: false, reason: 'unavailable' };
+    }
+    return { ok: true, issues };
   }
 
   /**
