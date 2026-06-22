@@ -2,10 +2,46 @@
 
 A focused proof of concept for integrating Oasis Security IdentityHub with Jira.
 
-This repository is built in milestones. The current milestone adds backend-only
-application authentication: globally unique user emails, Argon2id-hashed
-passwords, persistent server-side sessions, secure session cookies, and reusable
-authentication middleware.
+This repository is built in milestones. The current milestone (Milestone 5)
+adds a backend-only Jira API-token connection: an authenticated user connects
+their own Jira Cloud account by submitting a site URL, Atlassian email, and API
+token. The credentials are validated against Jira before storage, and the API
+token is encrypted at rest and never returned to the frontend.
+
+Earlier milestones added backend-only application authentication: globally
+unique user emails, Argon2id-hashed passwords, persistent server-side sessions,
+secure session cookies, and reusable authentication middleware.
+
+## Current milestone scope (Milestone 5: Jira API-token connection)
+
+Backend only. An authenticated application user connects their own Jira Cloud
+account. The flow validates the submitted credentials against Jira before
+anything is stored, encrypts the API token at rest, and never returns the token
+(or any credential material) to the frontend.
+
+Implemented:
+
+- `POST /api/jira/connection` and `GET /api/jira/connection`, both requiring the
+  existing application session and both returning `Cache-Control: no-store`.
+  `tenantId` and `userId` come solely from the session; ownership identifiers in
+  the request body are ignored.
+- Strict Jira Cloud site-URL validation and SSRF protection: only normalized
+  `https://<site>.atlassian.net` origins are accepted, and no network request is
+  made until validation succeeds.
+- A small, focused Jira credential verifier that calls
+  `GET {siteUrl}/rest/api/3/myself` with Jira Cloud Basic authentication over an
+  injectable HTTP transport, with an explicit timeout and no redirect following.
+- AES-256-GCM encryption of the API token with a fresh random nonce and
+  additional authenticated data bound to the credential type/version and the
+  owning `(tenantId, userId)`, using an environment-provided 32-byte key.
+- A new `jira_connections` table with a composite foreign key to
+  `users(tenant_id, id)` and one connection per `(tenant_id, user_id)`. Every
+  read and write is scoped by both tenant and user.
+
+Explicitly **not** implemented in Milestone 5: any frontend or Jira connection
+UI; OAuth 2.0 / 3LO, client id/secret, callbacks, state, or token refresh; a
+reusable Jira API client (owned by M7); Jira project discovery or validation;
+ticket creation; a disconnect endpoint; and production KMS or key rotation.
 
 ## Current milestone scope (Milestone 3: Application Authentication)
 
@@ -129,6 +165,10 @@ npm run seed       # run migrations, then insert demo data (idempotent)
   `(tenant_id, user_id)` foreign key.
 - `sessions(token_hash, tenant_id, user_id, created_at, expires_at)` — server-side
   sessions storing only the SHA-256 hash of the session token.
+- `jira_connections(id, tenant_id, user_id, site_url, email, account_id, encrypted_token, created_at, updated_at)` —
+  one Jira Cloud connection per `(tenant_id, user_id)` (enforced by a `UNIQUE`
+  constraint and a composite foreign key into `users(tenant_id, id)`). The API
+  token is stored only as an AES-256-GCM encrypted, versioned value.
 
 All tables are SQLite `STRICT` tables. Repositories enforce tenant scope: every
 normal user query requires the owning `tenantId`, so a user can never be read
@@ -204,6 +244,134 @@ raw token lives only in the cookie; only its SHA-256 hash is stored server-side.
 Because sessions are persisted in SQLite, a session survives an API restart as
 long as the same database file is used. See
 [Manual validation](#manual-validation) for end-to-end `curl` examples.
+
+## Jira connection (Milestone 5)
+
+An authenticated user connects their own Jira Cloud account. The backend
+validates the credentials against Jira before storing anything, encrypts the API
+token at rest, and never returns the token to any client.
+
+| Method & path              | Auth required | Purpose                                          |
+| -------------------------- | ------------- | ------------------------------------------------ |
+| `POST /api/jira/connection`| yes (cookie)  | Validate Jira credentials, store/replace the connection. |
+| `GET /api/jira/connection` | yes (cookie)  | Return safe connection status.                   |
+
+Both responses include `Cache-Control: no-store`. `tenantId` and `userId` are
+derived from the session only; ownership identifiers in the request body are
+ignored.
+
+### Setup: encryption key
+
+The Jira API token is encrypted with AES-256-GCM using an environment-provided
+key, `JIRA_CREDENTIAL_ENCRYPTION_KEY`, a base64 value decoding to exactly 32
+bytes. Generate one with Node.js:
+
+```bash
+node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"
+```
+
+Copy `apps/api/.env.example` to `apps/api/.env` and set the value. The API loads
+`apps/api/.env` on startup (built-in Node.js loader, no `dotenv` dependency).
+
+- **Missing key:** health, login, logout, and session restoration keep working;
+  the Jira connection endpoints return HTTP 503 `jira_not_configured`.
+- **Malformed key** (present but not 32 bytes after decoding): startup fails with
+  a sanitized configuration error. The key value is never logged.
+
+### Endpoint contracts
+
+`POST /api/jira/connection` request body:
+
+```json
+{
+  "siteUrl": "https://your-site.atlassian.net",
+  "email": "you@example.com",
+  "apiToken": "your-atlassian-api-token"
+}
+```
+
+Success (HTTP 200, for both first connection and reconnection):
+
+```json
+{ "connected": true, "siteUrl": "https://your-site.atlassian.net", "email": "you@example.com" }
+```
+
+`GET /api/jira/connection` returns either `{ "connected": false }` or the same
+connected shape above. No endpoint ever returns the API token, the encrypted
+token, encryption metadata, authorization headers, raw Jira responses, or the
+Jira account id.
+
+### Safe error behavior
+
+| Condition                                          | Status | Code                        |
+| -------------------------------------------------- | ------ | --------------------------- |
+| Invalid request input or invalid/unsafe site URL   | 400    | `invalid_request`           |
+| Missing application session                        | 401    | `unauthenticated`           |
+| Jira rejected the credentials                      | 422    | `jira_credentials_rejected` |
+| Jira unreachable / invalid response / upstream error | 502  | `jira_unreachable`          |
+| Jira request timed out                             | 504    | `jira_timeout`              |
+| Encryption key not configured                      | 503    | `jira_not_configured`       |
+
+Error responses never include raw Jira bodies, stack traces, tokens, the
+email/token combination, or internal exception messages. A failed validation or
+failed reconnection never deletes or overwrites an existing valid connection.
+
+### Site URL rules (SSRF protection)
+
+Only direct, normalized `https://<site>.atlassian.net` URLs are accepted. The
+following are rejected before any network call: HTTP, non-Atlassian hosts,
+deceptive suffixes (`x.atlassian.net.attacker.com`), bare `atlassian.net`,
+embedded credentials, explicit ports, any path other than `/`, query strings,
+fragments, IP addresses, `localhost`, multi-label hosts, and malformed URLs.
+
+### Manual Jira validation
+
+These steps require a real Jira Cloud site, account email, and
+[API token](https://id.atlassian.com/manage-profile/security/api-tokens). They
+were **not** executed as part of building this milestone (no live Jira call was
+made); run them yourself to validate end to end.
+
+```bash
+# 1. Generate and export a key, then start the API with Jira configured.
+export JIRA_CREDENTIAL_ENCRYPTION_KEY="$(node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))")"
+npm run dev --workspace apps/api
+
+# 2. Log in and keep the session cookie.
+curl -s -c alice.cookies -X POST http://localhost:3001/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"alice@example.com","password":"acme-alice-demo"}' > /dev/null
+
+# 3. Disconnected status.
+curl -i -b alice.cookies http://localhost:3001/api/jira/connection
+
+# 4. Connect with valid credentials (replace placeholders).
+curl -i -b alice.cookies -X POST http://localhost:3001/api/jira/connection \
+  -H 'Content-Type: application/json' \
+  -d '{"siteUrl":"https://your-site.atlassian.net","email":"you@example.com","apiToken":"REAL_TOKEN"}'
+
+# 5. Connected status, then reconnect (still HTTP 200).
+curl -i -b alice.cookies http://localhost:3001/api/jira/connection
+
+# 6. Invalid token -> 422; invalid site URL -> 400.
+curl -i -b alice.cookies -X POST http://localhost:3001/api/jira/connection \
+  -H 'Content-Type: application/json' \
+  -d '{"siteUrl":"https://your-site.atlassian.net","email":"you@example.com","apiToken":"WRONG"}'
+curl -i -b alice.cookies -X POST http://localhost:3001/api/jira/connection \
+  -H 'Content-Type: application/json' \
+  -d '{"siteUrl":"http://evil.example.com","email":"you@example.com","apiToken":"REAL_TOKEN"}'
+```
+
+Confirm the token is encrypted at rest and credentials never leak:
+
+```bash
+# The stored value starts with the version prefix (v1.) and is not the plaintext.
+sqlite3 apps/api/data/app.db \
+  'SELECT tenant_id, user_id, site_url, email, substr(encrypted_token,1,3) FROM jira_connections;'
+```
+
+A second user (separate cookie jar) sees only their own connection, demonstrating
+per-user isolation. The plaintext token must not appear in API logs, API
+responses, frontend state, generated files, or `git status`.
 
 ## Manual validation
 
@@ -336,9 +504,10 @@ is required on the backend.
 │   │   ├── src/
 │   │   │   ├── app.ts       # Express application construction
 │   │   │   ├── server.ts    # process startup, db init, listening
-│   │   │   ├── config/      # database path resolution (DATABASE_PATH)
+│   │   │   ├── config/      # database path, env loading, Jira key resolution
 │   │   │   ├── database/    # connection factory, migrator, lifecycle, seed
-│   │   │   └── repositories/# tenant-scoped tenant and user repositories
+│   │   │   ├── jira/        # Jira connection routes, verifier, token cipher
+│   │   │   └── repositories/# tenant-scoped repositories (users, sessions, Jira)
 │   │   └── test/            # backend Vitest tests
 │   └── web/                 # React + Vite frontend
 │       ├── src/

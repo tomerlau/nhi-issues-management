@@ -8,6 +8,20 @@ import type { DatabaseSync } from 'node:sqlite';
 import { AuthService } from './auth/auth-service.js';
 import { createAuthRouter } from './auth/auth-routes.js';
 import { invalidRequestError } from './auth/errors.js';
+import { createJiraRouter } from './jira/jira-routes.js';
+import type { FetchLike } from './jira/jira-verifier.js';
+
+export interface JiraAppOptions {
+  /**
+   * Decoded 32-byte credential encryption key, or null when Jira is not
+   * configured (the connection endpoints then return HTTP 503).
+   */
+  encryptionKey?: Buffer | null;
+  /** Injectable HTTP transport for the verifier; defaults to the global fetch. */
+  fetch?: FetchLike;
+  /** Outbound Jira request timeout in milliseconds. */
+  timeoutMs?: number;
+}
 
 export interface AppOptions {
   /**
@@ -15,6 +29,8 @@ export interface AppOptions {
    * disabled for local HTTP development. Defaults from NODE_ENV when omitted.
    */
   cookieSecure?: boolean;
+  /** Jira connection dependencies (encryption key and HTTP transport). */
+  jira?: JiraAppOptions;
 }
 
 interface BodyParseError extends Error {
@@ -51,11 +67,22 @@ export function createApp(db: DatabaseSync, options: AppOptions = {}): Express {
   const authService = new AuthService(db);
   app.use('/api/auth', createAuthRouter(authService, { cookieSecure }));
 
+  app.use(
+    '/api/jira',
+    createJiraRouter({
+      db,
+      authService,
+      encryptionKey: options.jira?.encryptionKey ?? null,
+      fetch: options.jira?.fetch ?? globalThis.fetch,
+      timeoutMs: options.jira?.timeoutMs,
+    }),
+  );
+
   // Translate body-parser failures (malformed JSON, payload too large) into the
   // same structured 400 shape the routes use.
   app.use((error: unknown, request: Request, response: Response, next: NextFunction) => {
     if (isBodyParseError(error)) {
-      if (request.path.startsWith('/api/auth')) {
+      if (request.path.startsWith('/api/auth') || request.path.startsWith('/api/jira')) {
         response.setHeader('Cache-Control', 'no-store');
       }
       response.status(400).json(invalidRequestError('Request body could not be parsed.'));
