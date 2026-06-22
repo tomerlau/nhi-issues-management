@@ -461,7 +461,10 @@ npm run seed       # run migrations, then insert demo data (idempotent)
   tenant-safe (the latter backed by a `UNIQUE (tenant_id, id)` index the migration
   adds), and `UNIQUE (tenant_id, jira_site_url, jira_issue_id)` prevents recording
   the same issue twice. `jira_site_url` is a snapshot so the row keeps identifying
-  the issue's site even after the connection is replaced.
+  the issue's site even after the connection is replaced. Migration
+  `007_jira_ticket_provenance_recent_index.sql` adds the additive index
+  `ix_jira_ticket_provenance_recent (tenant_id, jira_site_url, jira_project_key,
+  created_at DESC, id DESC)` serving the recent-tickets read access pattern.
 
 All tables are SQLite `STRICT` tables. Repositories enforce tenant scope: every
 normal user query requires the owning `tenantId`, so a user can never be read

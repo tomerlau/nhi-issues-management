@@ -2,7 +2,6 @@ import { randomBytes } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RecentTicketsService } from '../src/jira/recent-tickets-service.js';
-import { TicketProvenanceRepository } from '../src/repositories/ticket-provenance-repository.js';
 import { JiraConnectionRepository } from '../src/repositories/jira-connection-repository.js';
 import { encryptToken } from '../src/jira/token-cipher.js';
 import type { AuthContext } from '../src/auth/auth-context.js';
