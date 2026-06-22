@@ -87,7 +87,65 @@ scoped API-token support; roles, permissions, or tenant-admin UI; API-key
 functionality; browser credential persistence; global frontend state; and
 routing.
 
-## Current milestone scope (Milestone 7: Jira integration layer)
+## Current milestone scope (Milestone 8: Ticket creation domain service)
+
+Backend only. Milestone 8 adds the first ticket-creation flow: an authenticated
+user creates a fixed-`Task` Jira issue in a project against the tenant's shared
+connection, and the application records local provenance for the created issue.
+
+Implemented:
+
+- **`POST /api/tickets`** (`apps/api/src/jira/ticket-routes.ts`), session
+  authenticated and returning `Cache-Control: no-store`. It accepts only
+  `projectKey`, `title`, and `description`; `tenantId` and the creating `userId`
+  come solely from the session. Any client-supplied `tenantId`, `userId`,
+  `connectionId`, `siteUrl`, `issueType`, or ownership field is ignored. The body
+  is fully validated (project-key syntax and length, non-empty bounded title and
+  description, internal line breaks preserved) before any Jira network request,
+  with no validation framework.
+- **A `createIssue` operation on the central Jira client** that performs
+  `POST /rest/api/3/issue` with the fixed, non-subtask `Task` issue type resolved
+  by Milestone 7, the validated canonical project id, the title as the summary,
+  and the description rendered as a minimal ADF document preserving internal line
+  breaks. It runtime-validates the response (non-empty issue id and key) and
+  returns only sanitized outcomes; no raw Jira content leaks. It remains
+  Jira-specific, not a general SDK.
+- **A `createTicket` operation on the tenant-scoped integration service**
+  (`jira-integration-service.ts`) that loads the connection once, re-validates the
+  site URL, decrypts the token just-in-time, constructs a single short-lived
+  client, and uses that **same** client and connection for both project validation
+  and issue creation — so a concurrent connection replacement can never split the
+  two. It returns the sanitized issue id/key plus the exact connection and project
+  metadata used.
+- **A ticket-creation domain service** (`ticket-service.ts`) and a focused
+  provenance table (`jira_ticket_provenance`, migration
+  `006_jira_ticket_provenance.sql`) plus repository. Provenance is inserted **only
+  after** Jira confirms a successful creation; no pending row is written
+  beforehand. The table stores only identifiers and an audit trail (provenance id,
+  tenant id, creating user id, connection id, a site-URL snapshot, project id/key,
+  issue id/key, local timestamp) — never the title, description, credentials, or
+  any raw Jira response. Tenant-safe composite foreign keys and a
+  `UNIQUE (tenant_id, jira_site_url, jira_issue_id)` constraint prevent duplicates.
+- **Sanitized HTTP outcome mapping**: 201 on creation; 400 invalid input; 401
+  unauthenticated; 409 not connected; 422 project inaccessible or `Task`
+  unsupported; 502 credential rejection / invalid response / unavailable; 503 not
+  configured or credentials undecryptable; 504 timeout; 500 on a provenance
+  persistence failure. No raw Jira content, tokens, or internal detail ever leak.
+
+Approved POC behavior: Jira creation and SQLite provenance persistence are
+sequential and **not** a distributed transaction. If Jira creates the issue but
+provenance persistence fails, the result is `persistence_failed` (HTTP 500) and
+the already-created Jira issue may remain untracked locally; there is no
+compensation, retry, idempotency key, reconciliation, worker, or queue.
+
+Explicitly **not** implemented in Milestone 8: any frontend or ticket-creation
+UI; a recent-tickets list or any read/query endpoint; editing, deleting, or
+transitioning issues; external application API-key authentication; Jira project
+discovery or search; configurable issue types, custom fields, labels, components,
+or assignees; idempotency keys, retries, workers, queues, reconciliation,
+compensating deletion, webhooks; and Jira Server / Data Center support.
+
+## Earlier milestone scope (Milestone 7: Jira integration layer)
 
 Backend only. Milestone 7 provides one secure abstraction for authenticated Jira
 Cloud API access using the authenticated tenant's shared connection.
@@ -321,6 +379,16 @@ npm run seed       # run migrations, then insert demo data (idempotent)
   connection is shared by all users in the tenant; `configured_by_user_id`
   records the last successful configurer for audit only. The API token is stored
   only as an AES-256-GCM encrypted, versioned value.
+- `jira_ticket_provenance(id, tenant_id, created_by_user_id, jira_connection_id, jira_site_url, jira_project_id, jira_project_key, jira_issue_id, jira_issue_key, created_at)` —
+  local provenance for Jira issues created through `POST /api/tickets` (Milestone
+  8). It stores only stable identifiers and an audit trail — never the ticket
+  title, description, credentials, or any raw Jira response, since Jira remains
+  the source of truth for mutable issue contents. Composite foreign keys into
+  `users(tenant_id, id)` and `jira_connections(tenant_id, id)` keep every row
+  tenant-safe (the latter backed by a `UNIQUE (tenant_id, id)` index the migration
+  adds), and `UNIQUE (tenant_id, jira_site_url, jira_issue_id)` prevents recording
+  the same issue twice. `jira_site_url` is a snapshot so the row keeps identifying
+  the issue's site even after the connection is replaced.
 
 All tables are SQLite `STRICT` tables. Repositories enforce tenant scope: every
 normal user query requires the owning `tenantId`, so a user can never be read
