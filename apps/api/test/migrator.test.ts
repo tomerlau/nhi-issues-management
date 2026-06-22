@@ -49,6 +49,7 @@ describe('migration runner', () => {
       '001_initial_schema.sql',
       '002_authentication.sql',
       '003_jira_connections.sql',
+      '004_jira_connection_tenant_wide.sql',
     ]);
 
     const secondRun = runMigrations(db);
@@ -61,6 +62,7 @@ describe('migration runner', () => {
       '001_initial_schema.sql',
       '002_authentication.sql',
       '003_jira_connections.sql',
+      '004_jira_connection_tenant_wide.sql',
     ]);
     db.close();
   });

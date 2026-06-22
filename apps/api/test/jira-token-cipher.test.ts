@@ -7,11 +7,14 @@ import {
 } from '../src/jira/token-cipher.js';
 
 const key = randomBytes(32);
-const owner: CredentialContext = { tenantId: 'tenant-acme', userId: 'user-acme-alice' };
+const owner: CredentialContext = {
+  tenantId: 'tenant-acme',
+  configuredByUserId: 'user-acme-alice',
+};
 const plaintext = 'super-secret-jira-api-token';
 
 describe('jira token cipher', () => {
-  it('round-trips a token with the same key and ownership context', () => {
+  it('round-trips a token with the same key and credential context', () => {
     const serialized = encryptToken(plaintext, key, owner);
     expect(decryptToken(serialized, key, owner)).toBe(plaintext);
   });
@@ -30,18 +33,27 @@ describe('jira token cipher', () => {
     expect(() => decryptToken(serialized, randomBytes(32), owner)).toThrow();
   });
 
-  it('fails to decrypt under a different ownership context (AAD mismatch)', () => {
+  it('fails to decrypt under a different credential context (AAD mismatch)', () => {
     const serialized = encryptToken(plaintext, key, owner);
-    const otherUser: CredentialContext = { tenantId: 'tenant-acme', userId: 'user-acme-bob' };
-    const otherTenant: CredentialContext = { tenantId: 'tenant-globex', userId: 'user-acme-alice' };
+    const otherUser: CredentialContext = {
+      tenantId: 'tenant-acme',
+      configuredByUserId: 'user-acme-bob',
+    };
+    const otherTenant: CredentialContext = {
+      tenantId: 'tenant-globex',
+      configuredByUserId: 'user-acme-alice',
+    };
     expect(() => decryptToken(serialized, key, otherUser)).toThrow();
     expect(() => decryptToken(serialized, key, otherTenant)).toThrow();
   });
 
-  it('cannot move a ciphertext to another user and decrypt it', () => {
-    // Encrypt for alice, attempt to read it as bob with the same key.
+  it('cannot move a ciphertext to another configuring user and decrypt it', () => {
+    // Encrypt as configured by alice, attempt to read it as bob with the same key.
     const serialized = encryptToken(plaintext, key, owner);
-    const bob: CredentialContext = { tenantId: 'tenant-acme', userId: 'user-acme-bob' };
+    const bob: CredentialContext = {
+      tenantId: 'tenant-acme',
+      configuredByUserId: 'user-acme-bob',
+    };
     expect(() => decryptToken(serialized, key, bob)).toThrow();
   });
 
@@ -71,12 +83,12 @@ describe('jira token cipher', () => {
   });
 
   it('does not collide AAD when ids contain the delimiter character', () => {
-    // With a naive ':'-joined AAD, tenantId 'a:b' + userId 'c' and tenantId 'a'
-    // + userId 'b:c' both serialize to '...:a:b:c', so a ciphertext for one
-    // owner could be decrypted as the other. The unambiguous encoding must keep
-    // these two ownership contexts distinct.
-    const first: CredentialContext = { tenantId: 'a:b', userId: 'c' };
-    const second: CredentialContext = { tenantId: 'a', userId: 'b:c' };
+    // With a naive ':'-joined AAD, tenantId 'a:b' + configuredByUserId 'c' and
+    // tenantId 'a' + configuredByUserId 'b:c' both serialize to '...:a:b:c', so a
+    // ciphertext for one context could be decrypted as the other. The unambiguous
+    // encoding must keep these two credential contexts distinct.
+    const first: CredentialContext = { tenantId: 'a:b', configuredByUserId: 'c' };
+    const second: CredentialContext = { tenantId: 'a', configuredByUserId: 'b:c' };
     const serialized = encryptToken(plaintext, key, first);
     expect(decryptToken(serialized, key, first)).toBe(plaintext);
     expect(() => decryptToken(serialized, key, second)).toThrow();

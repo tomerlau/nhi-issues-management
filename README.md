@@ -3,9 +3,10 @@
 A focused proof of concept for integrating Oasis Security IdentityHub with Jira.
 
 This repository is built in milestones. The current milestone (Milestone 5)
-adds a backend-only Jira API-token connection: an authenticated user connects
-their own Jira Cloud account by submitting a site URL, Atlassian email, and API
-token. The credentials are validated against Jira before storage, and the API
+adds a backend-only Jira API-token connection: an authenticated user connects a
+Jira Cloud account by submitting a site URL, Atlassian email, and API token. The
+connection is a tenant-wide organization integration shared by all users in the
+tenant. The credentials are validated against Jira before storage, and the API
 token is encrypted at rest and never returned to the frontend.
 
 Earlier milestones added backend-only application authentication (globally
@@ -17,17 +18,19 @@ authentication and network errors.
 
 ## Current milestone scope (Milestone 5: Jira API-token connection)
 
-Backend only. An authenticated application user connects their own Jira Cloud
-account. The flow validates the submitted credentials against Jira before
-anything is stored, encrypts the API token at rest, and never returns the token
-(or any credential material) to the frontend.
+Backend only. An authenticated application user connects a Jira Cloud account
+for their tenant. The connection is a tenant-wide organization integration
+shared by all users in the tenant. The flow validates the submitted credentials
+against Jira before anything is stored, encrypts the API token at rest, and never
+returns the token (or any credential material) to the frontend.
 
 Implemented:
 
 - `POST /api/jira/connection` and `GET /api/jira/connection`, both requiring the
   existing application session and both returning `Cache-Control: no-store`.
-  `tenantId` and `userId` come solely from the session; ownership identifiers in
-  the request body are ignored.
+  `tenantId` and the acting `userId` come solely from the session; any
+  client-supplied `tenantId`, `userId`, `configuredByUserId`, or `connectionId`
+  in the request body is ignored.
 - Strict Jira Cloud site-URL validation and SSRF protection: only normalized
   `https://<site>.atlassian.net` origins are accepted, and no network request is
   made until validation succeeds.
@@ -40,10 +43,13 @@ Implemented:
   against, so a scoped token will fail verification here.
 - AES-256-GCM encryption of the API token with a fresh random nonce and
   additional authenticated data bound to the credential type/version and the
-  owning `(tenantId, userId)`, using an environment-provided 32-byte key.
-- A new `jira_connections` table with a composite foreign key to
-  `users(tenant_id, id)` and one connection per `(tenant_id, user_id)`. Every
-  read and write is scoped by both tenant and user.
+  credential context `(tenantId, configuredByUserId)`, using an
+  environment-provided 32-byte key.
+- A `jira_connections` table with a composite foreign key from
+  `(tenant_id, configured_by_user_id)` to `users(tenant_id, id)` and exactly one
+  connection per tenant (`UNIQUE (tenant_id)`). Every read and write is scoped by
+  tenant; `configured_by_user_id` is audit metadata recording the last successful
+  configurer, not an authorization boundary.
 
 Explicitly **not** implemented in Milestone 5: any frontend or Jira connection
 UI; OAuth 2.0 / 3LO, client id/secret, callbacks, state, or token refresh; a
@@ -185,10 +191,13 @@ npm run seed       # run migrations, then insert demo data (idempotent)
   `(tenant_id, user_id)` foreign key.
 - `sessions(token_hash, tenant_id, user_id, created_at, expires_at)` — server-side
   sessions storing only the SHA-256 hash of the session token.
-- `jira_connections(id, tenant_id, user_id, site_url, email, account_id, encrypted_token, created_at, updated_at)` —
-  one Jira Cloud connection per `(tenant_id, user_id)` (enforced by a `UNIQUE`
-  constraint and a composite foreign key into `users(tenant_id, id)`). The API
-  token is stored only as an AES-256-GCM encrypted, versioned value.
+- `jira_connections(id, tenant_id, configured_by_user_id, site_url, email, account_id, encrypted_token, created_at, updated_at)` —
+  exactly one tenant-wide Jira Cloud connection per tenant (enforced by
+  `UNIQUE (tenant_id)` and a composite foreign key from
+  `(tenant_id, configured_by_user_id)` into `users(tenant_id, id)`). The
+  connection is shared by all users in the tenant; `configured_by_user_id`
+  records the last successful configurer for audit only. The API token is stored
+  only as an AES-256-GCM encrypted, versioned value.
 
 All tables are SQLite `STRICT` tables. Repositories enforce tenant scope: every
 normal user query requires the owning `tenantId`, so a user can never be read
@@ -297,18 +306,27 @@ Log in with one of the [demo accounts](#demo-data), e.g. `alice@example.com` /
 
 ## Jira connection (Milestone 5)
 
-An authenticated user connects their own Jira Cloud account. The backend
-validates the credentials against Jira before storing anything, encrypts the API
-token at rest, and never returns the token to any client.
+An authenticated user connects a Jira Cloud account for their tenant. The
+connection is a **tenant-wide organization integration shared by all users in
+the tenant**: any authenticated tenant user can read its safe status and any of
+them can create or replace the single shared connection. Users in other tenants
+can never read, use, or replace it. The backend validates the credentials against
+Jira before storing anything, encrypts the API token at rest, and never returns
+the token to any client.
 
 | Method & path              | Auth required | Purpose                                          |
 | -------------------------- | ------------- | ------------------------------------------------ |
-| `POST /api/jira/connection`| yes (cookie)  | Validate Jira credentials, store/replace the connection. |
-| `GET /api/jira/connection` | yes (cookie)  | Return safe connection status.                   |
+| `POST /api/jira/connection`| yes (cookie)  | Validate Jira credentials, create or replace the tenant connection. |
+| `GET /api/jira/connection` | yes (cookie)  | Return safe connection status for the tenant.    |
 
-Both responses include `Cache-Control: no-store`. `tenantId` and `userId` are
-derived from the session only; ownership identifiers in the request body are
-ignored.
+Both responses include `Cache-Control: no-store`. `tenantId` and the acting
+`userId` are derived from the session only; any client-supplied `tenantId`,
+`userId`, `configuredByUserId`, or `connectionId` in the request body is ignored.
+`configured_by_user_id` records the last user who successfully configured the
+connection for audit only; it is not an authorization boundary, so any tenant
+user may replace the connection. (Restricting this to authorized tenant
+administrators is the documented production alternative; allowing every tenant
+user keeps roles and tenant administration out of this POC.)
 
 ### Setup: encryption key
 
@@ -364,7 +382,7 @@ Jira account id.
 
 Error responses never include raw Jira bodies, stack traces, tokens, the
 email/token combination, or internal exception messages. A failed validation or
-failed reconnection never deletes or overwrites an existing valid connection.
+failed replacement never deletes or overwrites an existing valid connection.
 
 ### Site URL rules (SSRF protection)
 
@@ -382,60 +400,93 @@ the token without selecting any scopes). Scoped tokens are not supported by this
 POC, because they target `https://api.atlassian.com/ex/jira/<cloudId>` instead of
 the direct site origin. Run them yourself to reproduce the validation end to end.
 
-This milestone was validated against live Jira with the following results:
+These steps exercise the tenant-wide sharing model. They use two Acme users
+(Alice and Bob) and one Globex user, each with its own cookie jar. A real Jira
+connection (step 4 onward) requires real credentials; the sharing, replacement,
+and isolation behavior can otherwise be reasoned about from the responses.
 
-- A live Jira connection and a reconnection both succeeded.
-- An invalid token returned HTTP 422 and preserved the existing connection.
-- Same-tenant and cross-tenant isolation held: each user saw only their own
-  connection.
-- The API token was encrypted at rest in SQLite (stored value prefixed `v1.`,
-  never the plaintext) and was absent from API responses, logs, generated files,
-  and `git status`.
-- An invalid Jira site URL returned HTTP 400 with no outbound request.
-- The missing and malformed encryption-key paths were not re-exercised by hand;
-  they are covered by automated tests.
+What to confirm:
+
+- **Alice connects Jira for Acme.** `POST` as Alice returns HTTP 200 `connected`.
+- **Bob sees the same connection.** `GET` as Bob (another Acme user) returns the
+  identical `siteUrl`/`email` — the connection is shared, not per-user.
+- **Bob replaces it and Alice sees the replacement.** `POST` as Bob returns
+  HTTP 200; a subsequent `GET` as Alice shows Bob's new `siteUrl`/`email`.
+- **Bob's failed replacement preserves the active connection.** A `POST` as Bob
+  with an invalid token returns HTTP 422 and leaves the stored row — including
+  `configured_by_user_id` and timestamps — completely unchanged.
+- **Globex remains isolated and can create its own connection.** A `GET` as the
+  Globex user returns `{ "connected": false }` while Acme is connected, and a
+  `POST` as Globex creates an independent second row.
+- **At most one row per tenant.** The database holds a single
+  `jira_connections` row per tenant.
+- **`configured_by_user_id` identifies the last successful configurer** (Alice,
+  then Bob after his successful replacement) and is audit-only.
+- **No plaintext token leaks** into responses, logs, database fields, generated
+  files, frontend-visible data, source control, or `git status`.
 
 ```bash
 # 1. Generate and export a key, then start the API with Jira configured.
 export JIRA_CREDENTIAL_ENCRYPTION_KEY="$(node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))")"
 npm run dev --workspace apps/api
 
-# 2. Log in and keep the session cookie.
+# 2. Log in as two Acme users and one Globex user, each with its own cookie jar.
 curl -s -c alice.cookies -X POST http://localhost:3001/api/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"email":"alice@example.com","password":"acme-alice-demo"}' > /dev/null
+curl -s -c bob.cookies -X POST http://localhost:3001/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"bob@example.com","password":"acme-bob-demo"}' > /dev/null
+curl -s -c globex.cookies -X POST http://localhost:3001/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"alice@globex.example.com","password":"globex-alice-demo"}' > /dev/null
 
-# 3. Disconnected status.
-curl -i -b alice.cookies http://localhost:3001/api/jira/connection
+# 3. Both Acme users start disconnected.
+curl -s -b alice.cookies http://localhost:3001/api/jira/connection   # {"connected":false}
+curl -s -b bob.cookies   http://localhost:3001/api/jira/connection   # {"connected":false}
 
-# 4. Connect with valid credentials (replace placeholders).
+# 4. Alice connects for Acme (replace placeholders with real credentials).
 curl -i -b alice.cookies -X POST http://localhost:3001/api/jira/connection \
   -H 'Content-Type: application/json' \
-  -d '{"siteUrl":"https://your-site.atlassian.net","email":"you@example.com","apiToken":"REAL_TOKEN"}'
+  -d '{"siteUrl":"https://your-site.atlassian.net","email":"alice@example.com","apiToken":"REAL_TOKEN"}'
 
-# 5. Connected status, then reconnect (still HTTP 200).
-curl -i -b alice.cookies http://localhost:3001/api/jira/connection
+# 5. Bob, another Acme user, sees the SAME shared connection.
+curl -s -b bob.cookies http://localhost:3001/api/jira/connection
 
-# 6. Invalid token -> 422; invalid site URL -> 400.
+# 6. Bob replaces it; Alice then sees Bob's replacement.
+curl -i -b bob.cookies -X POST http://localhost:3001/api/jira/connection \
+  -H 'Content-Type: application/json' \
+  -d '{"siteUrl":"https://your-other-site.atlassian.net","email":"bob@example.com","apiToken":"REAL_TOKEN"}'
+curl -s -b alice.cookies http://localhost:3001/api/jira/connection
+
+# 7. Bob's failed replacement (invalid token) -> 422, active connection preserved.
+curl -i -b bob.cookies -X POST http://localhost:3001/api/jira/connection \
+  -H 'Content-Type: application/json' \
+  -d '{"siteUrl":"https://your-other-site.atlassian.net","email":"bob@example.com","apiToken":"WRONG"}'
+
+# 8. Globex is isolated; it sees nothing of Acme and creates its own connection.
+curl -s -b globex.cookies http://localhost:3001/api/jira/connection   # {"connected":false}
+curl -i -b globex.cookies -X POST http://localhost:3001/api/jira/connection \
+  -H 'Content-Type: application/json' \
+  -d '{"siteUrl":"https://globex-site.atlassian.net","email":"alice@globex.example.com","apiToken":"REAL_TOKEN"}'
+
+# 9. Invalid site URL -> 400 with no outbound request.
 curl -i -b alice.cookies -X POST http://localhost:3001/api/jira/connection \
   -H 'Content-Type: application/json' \
-  -d '{"siteUrl":"https://your-site.atlassian.net","email":"you@example.com","apiToken":"WRONG"}'
-curl -i -b alice.cookies -X POST http://localhost:3001/api/jira/connection \
-  -H 'Content-Type: application/json' \
-  -d '{"siteUrl":"http://evil.example.com","email":"you@example.com","apiToken":"REAL_TOKEN"}'
+  -d '{"siteUrl":"http://evil.example.com","email":"alice@example.com","apiToken":"REAL_TOKEN"}'
 ```
 
-Confirm the token is encrypted at rest and credentials never leak:
+Confirm exactly one row per tenant, audit metadata, and that no token leaks:
 
 ```bash
-# The stored value starts with the version prefix (v1.) and is not the plaintext.
+# One row per tenant; configured_by_user_id is the last successful configurer;
+# the stored token starts with the version prefix (v1.) and is never the plaintext.
 sqlite3 apps/api/data/app.db \
-  'SELECT tenant_id, user_id, site_url, email, substr(encrypted_token,1,3) FROM jira_connections;'
+  'SELECT tenant_id, configured_by_user_id, site_url, email, substr(encrypted_token,1,3) FROM jira_connections;'
 ```
 
-A second user (separate cookie jar) sees only their own connection, demonstrating
-per-user isolation. The plaintext token must not appear in API logs, API
-responses, frontend state, generated files, or `git status`.
+The plaintext token must not appear in API logs, API responses, frontend state,
+generated files, the database token field, or `git status`.
 
 ## Manual validation
 

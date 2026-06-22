@@ -175,11 +175,34 @@ cumulatively as later milestones add functionality.
   cloud-id resolution), which is outside this POC's direct-origin model, so a
   scoped token fails verification. OAuth 2.0 / 3LO remains documented only as the
   production alternative below, not an implemented option.
-- **One connection per application user,** owned by the `(tenantId, userId)`
-  pair and reachable only within that scope.
+- **The Jira connection is a tenant-wide organization integration,** shared by
+  every user in the tenant — not a per-user connection. There is exactly one
+  connection per tenant (`UNIQUE (tenant_id)`), reachable only within that
+  tenant's scope; users in other tenants can never read, use, or replace it.
+  - Every authenticated user in a tenant can read the safe connection status.
+  - Every authenticated user in a tenant can create or replace the shared
+    connection. A successful replacement updates the existing row in place
+    (preserving its id) and records the acting user as the configurer; a failed
+    replacement preserves the existing connection unchanged.
+  - `configured_by_user_id` records the user who last successfully configured the
+    connection. It is **audit metadata only, not an authorization boundary**: who
+    configured it last never restricts who may replace it.
+  - **Production alternative:** restrict creating or replacing the shared
+    integration to authorized tenant administrators, with roles and permissions
+    governing who manages the connection.
+  - **Tradeoff:** allowing every tenant user to create or replace the connection
+    avoids adding roles, permissions, and tenant administration to this POC,
+    while keeping the integration shared at the correct (tenant) scope.
+- **Legacy per-user connections are consolidated by migration 004.** The original
+  Milestone 5 schema stored one connection per `(tenant_id, user_id)`. The
+  forward-only migration rebuilds the table to the tenant-wide shape and, when a
+  tenant holds several legacy rows, deterministically keeps exactly one: the
+  greatest `updated_at`, breaking ties by the greatest `id`. The retained row's
+  previous `user_id` becomes its `configured_by_user_id`, so its encrypted token
+  (whose AAD binds `(tenant_id, user_id)`) remains decryptable.
 - **Credentials are validated before persistence.** The token is verified
   against `GET /rest/api/3/myself` and only stored on success; a failed
-  validation or reconnection never overwrites an existing valid connection.
+  validation or replacement never overwrites an existing valid connection.
 - **API tokens are never returned to the frontend** and never logged. Only safe
   connection status (connected flag, site URL, email) is exposed.
 - **Tokens may expire or be revoked.** When that happens the connection becomes

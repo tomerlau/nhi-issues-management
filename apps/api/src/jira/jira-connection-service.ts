@@ -41,10 +41,12 @@ function toStatus(connection: JiraConnection | null): ConnectionStatus {
 }
 
 /**
- * Orchestrates the Jira connection flow: verify the submitted credentials
- * against Jira, and only on success encrypt the token and store/replace the
- * owner's connection. A failed verification never touches the stored row, so an
- * existing valid connection survives a failed reconnection.
+ * Orchestrates the tenant-wide Jira connection flow: verify the submitted
+ * credentials against Jira, and only on success encrypt the token and
+ * store/replace the tenant's shared connection. tenantId and the acting userId
+ * come solely from the authenticated session. A failed verification never
+ * touches the stored row, so an existing valid connection survives a failed
+ * replacement.
  */
 export class JiraConnectionService {
   private readonly repository: JiraConnectionRepository;
@@ -60,7 +62,7 @@ export class JiraConnectionService {
   }
 
   getStatus(context: AuthContext): ConnectionStatus {
-    return toStatus(this.repository.findByOwner(context.tenantId, context.userId));
+    return toStatus(this.repository.findByTenant(context.tenantId));
   }
 
   async connect(context: AuthContext, input: ConnectInput): Promise<ConnectOutcome> {
@@ -77,10 +79,11 @@ export class JiraConnectionService {
 
     const encryptedToken = encryptToken(input.apiToken, this.encryptionKey, {
       tenantId: context.tenantId,
-      userId: context.userId,
+      configuredByUserId: context.userId,
     });
 
-    this.repository.upsert(context.tenantId, context.userId, {
+    this.repository.upsert(context.tenantId, {
+      configuredByUserId: context.userId,
       siteUrl: input.origin,
       email: input.email,
       accountId: verification.accountId,
