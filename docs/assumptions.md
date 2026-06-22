@@ -1,7 +1,7 @@
 # Project Assumptions
 
 This document records the assumptions and tradeoffs relevant to the
-functionality implemented through the current milestone (Milestone 9). It grows
+functionality implemented through the current milestone (Milestone 10). It grows
 cumulatively as later milestones add functionality.
 
 ## Scope
@@ -26,6 +26,11 @@ cumulatively as later milestones add functionality.
   the created issue.
 - Milestone 9 adds the frontend ticket-creation UI on top of the Milestone 8
   backend, without changing the backend ticket contract.
+- Milestone 10 adds a backend-only recent-tickets read: an authenticated
+  `GET /api/tickets?projectKey=...` endpoint that returns the ten most recent
+  tickets created through this application for the tenant's currently connected
+  Jira site and a selected project, with membership and order from local
+  provenance and every displayed value hydrated live from Jira.
 - The optional blog digest is not part of the current implementation.
 
 ## Frontend
@@ -463,3 +468,56 @@ cumulatively as later milestones add functionality.
   integration; ticket links; ticket editing, deletion, or transitions; webhook
   synchronization; external API-key authentication or an external REST API;
   routing or global frontend state; and any later-milestone functionality.
+
+## Recent tickets backend (Milestone 10)
+
+- **Backend only.** `GET /api/tickets?projectKey=...` requires the existing
+  application session and returns `Cache-Control: no-store`. The only request
+  input is the `projectKey` query parameter; no tenant, user, connection, site,
+  credential, limit, cursor, or ownership value is read from the request. There is
+  no frontend in this milestone.
+- **Membership and order from local provenance; values from live Jira.** Local
+  provenance decides which tickets appear (the tenant's rows for the currently
+  connected site URL and the normalized project key) and their stable order
+  (`created_at DESC, id DESC`). Every displayed value — current issue key, title,
+  and Jira creation time — is hydrated live from Jira on each request, so renames
+  and moves are reflected and nothing stale is shown. The browse `url` is built
+  only from the validated current Jira origin plus `/browse/` and the
+  percent-encoded current key, never from a Jira self/redirect/location URL.
+- **Tenant-wide visibility, not per-user.** The read is scoped by tenant and is
+  **not** filtered by the creating user, so two users in the same tenant see the
+  same tenant-owned tickets. It is also **not** filtered by connection id: the
+  site-URL snapshot is the visibility boundary, so provenance recorded against the
+  now-current site stays visible after the connection row is replaced in place,
+  while provenance recorded against a previously connected site is excluded.
+- **Fixed internal batching; no user-controlled pagination.** Candidates are
+  loaded in fixed internal batches of 25 using an internal keyset cursor, hydrated
+  one bulk fetch per batch, and capped at ten valid results. The batch size, cap,
+  and cursor are internal constants; no `limit`, `cursor`, sort, or filter is ever
+  accepted from or exposed to the client, and concurrent inserts never shift or
+  duplicate a page.
+- **One connection snapshot per request.** The connection is loaded exactly once
+  (via a narrowly-scoped loader that re-validates the site URL and decrypts the
+  token just-in-time), and one short-lived client and origin snapshot is reused for
+  every batch, so a concurrent connection replacement cannot mix two Jira sites in
+  a single response.
+- **Skips rather than fails on per-issue gaps; fails closed on malformed
+  responses.** Issues Jira omits (deleted, moved away, inaccessible) and issues
+  whose current project differs from the selected one (moved) are skipped, and
+  later batches are loaded to backfill toward ten. A complete bulk failure, or a
+  success response whose top-level shape or any individual issue is malformed,
+  collapses to a sanitized upstream failure (502 `jira_unreachable`); a 401 maps
+  to 502 `jira_credentials_rejected`, a stall to 504 `jira_timeout`, a missing
+  connection to 409 `jira_not_connected`, and an absent key or undecryptable
+  credential to 503 `jira_not_configured`. No raw Jira content, individual issue
+  error, token, or internal detail ever escapes.
+- **No caching or background refresh (POC choice).** Each request hydrates from
+  Jira synchronously; there is no cache, ETag, or background sync.
+  - **Production alternative:** a cached/incrementally-refreshed projection of
+    issue metadata with invalidation, reducing per-request Jira calls.
+  - **Tradeoff:** synchronous hydration keeps the POC simple and always-fresh at
+    the cost of one bulk Jira call per internal batch per request.
+- **Deferred:** any frontend or recent-tickets UI; user-controlled pagination,
+  limits, sorting, or filtering beyond the single `projectKey`; full-text search or
+  Jira project discovery; caching or background refresh of hydrated issues; editing,
+  deleting, or transitioning issues; and Jira Server / Data Center support.

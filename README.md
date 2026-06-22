@@ -2,16 +2,24 @@
 
 A focused proof of concept for integrating Oasis Security IdentityHub with Jira.
 
-This repository is built in milestones. The current milestone (Milestone 9)
-adds the frontend ticket-creation UI: an authenticated user whose tenant is
-connected to Jira can create an NHI finding ticket from the application shell. It
-is frontend only and consumes the unchanged Milestone 8 `POST /api/tickets`
-contract; no backend behavior changed.
+This repository is built in milestones. The current milestone (Milestone 10)
+adds a backend-only recent-tickets read: an authenticated
+`GET /api/tickets?projectKey=...` endpoint that returns the ten most recent
+tickets created through this application for the tenant's currently connected
+Jira site and a selected project. Membership and order come from local
+provenance; every displayed value (current key, title, creation time) is
+hydrated live from Jira in fixed internal batches. It builds on the Milestone 8
+ticket-creation provenance.
 
-Milestone 8 added the backend-only ticket-creation domain service this builds on:
-an authenticated `POST /api/tickets` endpoint that creates a fixed-`Task` Jira
-Cloud issue against the tenant's shared connection and records minimal local
-provenance for the created issue. It builds on the Milestone 7 integration layer.
+Milestone 9 added the frontend ticket-creation UI: an authenticated user whose
+tenant is connected to Jira can create an NHI finding ticket from the application
+shell. It is frontend only and consumes the unchanged Milestone 8
+`POST /api/tickets` contract; no backend behavior changed.
+
+Milestone 8 added a backend-only ticket-creation domain service: an
+authenticated `POST /api/tickets` endpoint that creates a fixed-`Task` Jira Cloud
+issue against the tenant's shared connection and records minimal local provenance
+for the created issue. It builds on the Milestone 7 integration layer.
 
 Milestone 7 added the backend-only Jira integration layer this builds on: one
 central Jira client and a tenant-scoped integration service that validates a Jira
@@ -92,7 +100,66 @@ scoped API-token support; roles, permissions, or tenant-admin UI; API-key
 functionality; browser credential persistence; global frontend state; and
 routing.
 
-## Current milestone scope (Milestone 9: Ticket creation UI)
+## Current milestone scope (Milestone 10: Recent tickets backend)
+
+Backend only. Milestone 10 adds the first ticket read: an authenticated
+`GET /api/tickets?projectKey=...` that returns the ten most recent tickets
+created through this application for the authenticated tenant, the currently
+connected Jira site, and a selected project.
+
+Implemented:
+
+- **`GET /api/tickets`** (`apps/api/src/jira/ticket-routes.ts`), session
+  authenticated and returning `Cache-Control: no-store`. The only request input
+  is the `projectKey` query parameter, validated and normalized (trim, uppercase)
+  with the same conservative Jira project-key syntax and length used for ticket
+  creation. A missing, empty, malformed, or repeated `projectKey` is a structured
+  400 with no Jira call. No tenant, user, connection, site, credential, limit,
+  cursor, or ownership value is ever read from the request.
+- **A tenant-scoped batch read on the provenance repository**
+  (`listRecentCandidates` in `ticket-provenance-repository.ts`). Every query is
+  scoped to `tenant_id`, the currently connected `jira_site_url`, and the
+  normalized `jira_project_key`; it is **not** filtered by `created_by_user_id`
+  (two users in a tenant see the same tenant-owned tickets) and **not** by
+  `jira_connection_id` (the site-URL snapshot is the visibility boundary).
+  Ordering is stable (`created_at DESC, id DESC`) with internal keyset pagination,
+  so concurrent inserts never shift or duplicate a page. Migration
+  `007_jira_ticket_provenance_recent_index.sql` adds a forward-only, additive
+  index matching this exact access pattern.
+- **A `bulkFetchIssues` operation on the central Jira client** that performs one
+  `POST /rest/api/3/issue/bulkfetch` per batch requesting only the minimal
+  `summary`, `created`, and `project` fields. It identifies issues by their
+  immutable Jira id, assumes no response order, runtime-validates the complete
+  success response (a single malformed issue invalidates the whole response), and
+  returns only sanitized outcomes. Issues Jira omits (deleted, moved away, or
+  inaccessible) are simply absent; individual Jira issue errors are never read or
+  exposed.
+- **A recent-tickets domain service** (`recent-tickets-service.ts`) that loads the
+  tenant connection exactly once through a narrowly-scoped helper
+  (`jira-connection-loader.ts`), re-validates the site URL, decrypts the token
+  just-in-time, and reuses one short-lived client and origin snapshot for every
+  batch — so a concurrent connection replacement can never mix two Jira sites in
+  one request. It loads local candidates in fixed internal batches of 25, hydrates
+  each with one bulk fetch, skips absent and moved issues (current project key ≠
+  selected), and stops at ten valid tickets or when candidates are exhausted.
+  Every displayed value comes from the live Jira hydration; the `url` is built
+  only from the validated current origin plus `/browse/` and the percent-encoded
+  current key, never from a self/redirect/location URL.
+- **Sanitized HTTP outcome mapping**: 200 with `{ tickets: [...] }` (an empty
+  array when there are no valid results); 400 invalid input; 401 unauthenticated;
+  409 not connected; 502 `jira_credentials_rejected` when the stored credentials
+  are rejected, or 502 `jira_unreachable` for a malformed response / unavailable
+  upstream; 503 not configured or credentials undecryptable; 504 timeout. No raw
+  Jira content, tokens, or internal detail ever leak.
+
+Explicitly **not** implemented in Milestone 10: any frontend or recent-tickets
+UI; user-controlled pagination, limits, sorting, or filtering beyond the single
+`projectKey`; editing, deleting, or transitioning issues; full-text search or
+Jira project discovery; caching or background refresh of hydrated issues; cursors
+or limits exposed in the request or response; and Jira Server / Data Center
+support.
+
+## Earlier milestone scope (Milestone 9: Ticket creation UI)
 
 Frontend only; it consumes the unchanged Milestone 8 backend contract
 (`POST /api/tickets`). No backend changes were made. Milestone 9 lets an
@@ -138,7 +205,7 @@ search, or dropdown; issue-type selection or configurable issue types; Jira cust
 fields; a recent-tickets list or endpoint integration; ticket links; ticket
 editing, deletion, or transitions; webhook synchronization; external API-key
 authentication or a REST API for external callers; routing or global frontend
-state; and any M10/M11/M12/M13 functionality.
+state; and any later-milestone functionality.
 
 ## Earlier milestone scope (Milestone 8: Ticket creation domain service)
 
@@ -447,7 +514,10 @@ npm run seed       # run migrations, then insert demo data (idempotent)
   tenant-safe (the latter backed by a `UNIQUE (tenant_id, id)` index the migration
   adds), and `UNIQUE (tenant_id, jira_site_url, jira_issue_id)` prevents recording
   the same issue twice. `jira_site_url` is a snapshot so the row keeps identifying
-  the issue's site even after the connection is replaced.
+  the issue's site even after the connection is replaced. Migration
+  `007_jira_ticket_provenance_recent_index.sql` adds the additive index
+  `ix_jira_ticket_provenance_recent (tenant_id, jira_site_url, jira_project_key,
+  created_at DESC, id DESC)` serving the recent-tickets read access pattern.
 
 All tables are SQLite `STRICT` tables. Repositories enforce tenant scope: every
 normal user query requires the owning `tenantId`, so a user can never be read
@@ -950,6 +1020,94 @@ What to confirm:
 sqlite3 apps/api/data/app.db \
   'SELECT tenant_id, created_by_user_id, jira_site_url, jira_project_key, jira_issue_key FROM jira_ticket_provenance;'
 ```
+
+## Recent tickets (Milestone 10)
+
+An authenticated user reads the ten most recent tickets created through this
+application for the tenant's currently connected Jira site and a selected
+project. This is the first ticket read; it is backend only.
+
+| Method & path                       | Auth required | Purpose                                                          |
+| ----------------------------------- | ------------- | ---------------------------------------------------------------- |
+| `GET /api/tickets?projectKey=ABC`   | yes (cookie)  | Return up to ten recent app-created tickets for the project.     |
+
+The response includes `Cache-Control: no-store`. The only request input is the
+`projectKey` query parameter; it is trimmed, uppercased, and must match the same
+conservative Jira project-key syntax and length as ticket creation. A missing,
+empty, malformed, or repeated `projectKey` is a structured 400 with no Jira call.
+No tenant, user, connection, site, credential, limit, cursor, or ownership value
+is ever read from the request, and there is no user-controlled pagination.
+
+Success (HTTP 200) returns at most ten tickets in stable local provenance order
+(`created_at DESC, id DESC`), or an empty array when there are no valid results:
+
+```json
+{
+  "tickets": [
+    {
+      "issueId": "10500",
+      "issueKey": "ABC-42",
+      "title": "Leaked service-account key",
+      "createdAt": "2026-06-01T12:00:00.000Z",
+      "url": "https://acme.atlassian.net/browse/ABC-42"
+    }
+  ]
+}
+```
+
+Membership and order come from local provenance, but every displayed value
+(current key, title, Jira creation time) is hydrated live from Jira, and the
+`url` is built only from the validated current Jira origin plus `/browse/` and
+the percent-encoded current key — never from a self/redirect/location URL. Local
+candidates are loaded in fixed internal batches of 25 and hydrated with one bulk
+fetch per batch; issues Jira omits (deleted, moved away, inaccessible) and issues
+that moved to another project are skipped, and later batches are loaded until ten
+valid tickets are found or candidates run out. The connection is loaded once and a
+single client and origin snapshot is reused for the whole request, so one response
+never mixes two Jira sites. Two users in the same tenant see the same tenant-owned
+tickets; the connection id is not part of the visibility boundary, so the
+site-URL snapshot still identifies where each issue was created even after the
+connection row is replaced.
+
+### Safe error behavior
+
+| Condition                                                | Status | Code                        |
+| -------------------------------------------------------- | ------ | --------------------------- |
+| Missing/empty/malformed/repeated `projectKey`            | 400    | `invalid_request`           |
+| Missing application session                              | 401    | `unauthenticated`           |
+| Tenant has no Jira connection                            | 409    | `jira_not_connected`        |
+| Stored Jira credentials rejected                         | 502    | `jira_credentials_rejected` |
+| Jira unreachable / malformed response / upstream error   | 502    | `jira_unreachable`          |
+| Jira request timed out                                   | 504    | `jira_timeout`              |
+| Encryption key absent or stored credential undecryptable | 503    | `jira_not_configured`       |
+
+### Manual recent-tickets validation
+
+Connect Jira and create one or more tickets first (see
+[Ticket creation](#ticket-creation-milestone-8)), then:
+
+```bash
+# Read the recent tickets for a project. tenant and site come only from the session.
+curl -i -b alice.cookies 'http://localhost:3001/api/tickets?projectKey=ABC'
+
+# Invalid/missing/repeated projectKey -> 400 with no Jira call.
+curl -i -b alice.cookies 'http://localhost:3001/api/tickets'
+curl -i -b alice.cookies 'http://localhost:3001/api/tickets?projectKey=ab-cd'
+
+# No connection -> 409. A second same-tenant user sees the same tenant-owned rows.
+curl -i -b globex.cookies 'http://localhost:3001/api/tickets?projectKey=ABC'
+```
+
+What to confirm:
+
+- **Happy path** → HTTP 200 with up to ten tickets newest-first, each `url`
+  pointing at the connected site's `/browse/<currentKey>`.
+- **Live hydration** → renaming or moving an issue in Jira is reflected (a moved
+  issue disappears from its old project's list; a deleted issue is skipped).
+- **No user-controlled pagination** → adding `limit`/`cursor` query parameters
+  changes nothing; the fixed cap of ten always applies.
+- **Tenant isolation** → another tenant never sees these rows even when connected
+  to the same Jira site URL.
 
 ## Ticket creation UI (Milestone 9)
 

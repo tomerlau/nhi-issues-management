@@ -1,7 +1,7 @@
 # Architecture
 
 This document describes the architecture that currently exists through
-Milestone 9. It intentionally avoids designing later domain layers in detail.
+Milestone 10. It intentionally avoids designing later domain layers in detail.
 
 ## Monorepo structure
 
@@ -23,7 +23,8 @@ trees, build outputs, and lifecycles. They communicate only over HTTP. The
 frontend holds no backend secrets or configuration; it knows only relative `/api`
 endpoints — the authentication endpoints `/api/auth/*`, the Jira connection
 endpoints `/api/jira/connection`, and (as of Milestone 8) the ticket-creation
-endpoint `/api/tickets`. The backend
+endpoint `/api/tickets` — which Milestone 10 extends with a `GET` recent-tickets
+read on the same path. The backend
 health endpoint `/api/health` remains available separately for liveness checks
 and is not part of the frontend authentication flow.
 
@@ -796,3 +797,84 @@ loaded or a save succeeds). `AuthenticatedShell` holds that boolean and renders
 composition: connection management and ticket creation stay as separate
 components, and no global state, routing, or broad context abstraction is
 introduced.
+
+## Recent tickets backend (Milestone 10)
+
+Milestone 10 adds the first ticket read: `GET /api/tickets?projectKey=...` returns
+the ten most recent tickets created through this application for the authenticated
+tenant, the currently connected Jira site, and one selected project. It builds on
+the Milestone 8 provenance table and the Milestone 7 Jira client, adding one
+read handler on the existing `/api/tickets` route, one read service, one bulk
+hydration operation on the client, and one additive index. It is backend only.
+
+### Request boundary
+
+`GET /api/tickets` shares the `/api/tickets` router, so it inherits `requireAuth`
+and `Cache-Control: no-store`. The only request input is the `projectKey` query
+parameter, validated by `validateProjectKeyQuery` with the same conservative
+syntax and length used at creation time and normalized (trim, uppercase). Express
+parses a repeated `projectKey` as an array, which is rejected, so no ambiguous or
+duplicated value can reach the query; a missing, empty, or malformed key is a
+structured 400 before any Jira call. No tenant, user, connection, site, credential,
+limit, cursor, or ownership value is ever read from the request. There is no
+user-controlled pagination: the batch size and result cap are fixed internal
+constants.
+
+### Membership from local provenance, values from live Jira
+
+The trust boundary is explicit. **Local provenance** (`jira_ticket_provenance`)
+decides *which* tickets appear and in what order; **Jira** decides every displayed
+*value*. `TicketProvenanceRepository.listRecentCandidates` returns only the
+identifiers the flow needs (provenance `id`, immutable `jira_issue_id`,
+`created_at`) for rows matching the tenant, the current connected `jira_site_url`,
+and the normalized `jira_project_key`. It is deliberately **not** filtered by
+`created_by_user_id` (so two users in a tenant see the same tenant-owned tickets)
+and **not** by `jira_connection_id` (the site-URL snapshot is the visibility
+boundary, so a row created against the now-current site is still visible after the
+connection row is replaced in place). Order is stable (`created_at DESC, id DESC`)
+and pagination is internal keyset: the first batch passes no cursor, and a later
+batch selects rows strictly after the last loaded candidate under the same order,
+so concurrent inserts never shift or duplicate a page. Migration
+`007_jira_ticket_provenance_recent_index.sql` adds an additive index on
+`(tenant_id, jira_site_url, jira_project_key, created_at DESC, id DESC)` that
+serves the equality filter, ordering, and keyset comparison directly.
+
+### One connection snapshot, batched bulk hydration
+
+`recent-tickets-service.ts` loads the tenant connection **exactly once** through a
+narrowly-scoped helper, `jira-connection-loader.ts`. The helper mirrors the M8
+integration-service connection handling — `findByTenant`, re-validate the site URL
+(defense in depth), decrypt the token just-in-time bound to the stored tenant —
+and constructs a single short-lived `JiraClient`, returning it together with the
+re-validated `origin` and the stored `siteUrl`. Extracting this helper rather than
+reloading per batch is deliberate: the service reuses the one client and origin
+snapshot for every batch, so a concurrent connection replacement can never make
+one request mix two Jira sites. A missing connection is `not_connected`; an invalid
+stored site URL or an undecryptable token collapses to a single
+`configuration_error`, and no variant carries the plaintext token.
+
+The service loads candidates in fixed batches of 25 and hydrates each with one
+`JiraClient.bulkFetchIssues` call (`POST /rest/api/3/issue/bulkfetch`, requesting
+only `summary`, `created`, and `project`). The client identifies issues by their
+immutable id, assumes no response order, and runtime-validates the **complete**
+success response: the top-level `issues` array must be present and every present
+issue must validate fully, so a single malformed issue invalidates the whole
+response (mapped to `unavailable`). `issueErrors` and omitted issues are simply
+absent. The service maps the returned issues by id, then rebuilds the result in
+local provenance order, skipping any candidate Jira omitted (deleted, moved away,
+inaccessible) and any issue whose current project key differs from the selected
+project (a moved issue). It keeps loading later batches until ten valid tickets are
+found or candidates are exhausted (a short batch signals exhaustion). Each returned
+item's `url` is built only from the validated current `origin` plus `/browse/` and
+the percent-encoded current key — never a self/redirect/location URL.
+
+### Outcome-to-status mapping
+
+`ok` → 200 `{ tickets: [...] }` (an empty array when there are no valid results);
+`not_connected` → 409 `jira_not_connected`; `credentials_rejected` → 502
+`jira_credentials_rejected`; `unavailable` → 502 `jira_unreachable`; `timeout` →
+504 `jira_timeout`; `configuration_error` → 503 `jira_not_configured`. An invalid
+`projectKey` returns 400 `invalid_request` before any Jira call, and an
+unauthenticated request returns 401 `unauthenticated`. The mapping mirrors the
+sanitized Jira outcomes already used by ticket creation; no variant carries the
+plaintext token, raw Jira content, or internal error detail.
