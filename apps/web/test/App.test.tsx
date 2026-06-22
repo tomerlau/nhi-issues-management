@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../src/App';
 import { AuthError, login, logout, restoreSession, type SafeUser } from '../src/api/auth';
-import { getJiraConnection } from '../src/api/jira';
+import { getJiraConnection, JiraApiError } from '../src/api/jira';
 
 vi.mock('../src/api/auth', async () => {
   const actual = await vi.importActual<typeof import('../src/api/auth')>('../src/api/auth');
@@ -196,6 +196,55 @@ describe('login', () => {
 
     resolveLogin(alice);
     expect(await screen.findByText(/welcome, alice anderson/i)).toBeInTheDocument();
+  });
+});
+
+describe('ticket creation gating', () => {
+  it('shows the ticket creation form only when Jira is connected', async () => {
+    mockedRestore.mockResolvedValue(alice);
+    mockedGetJira.mockResolvedValue({
+      connected: true,
+      siteUrl: 'https://acme.atlassian.net',
+      email: 'alice@example.com',
+    });
+
+    render(<App />);
+    await screen.findByText(/welcome, alice anderson/i);
+
+    expect(await screen.findByLabelText(/project key/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^create ticket$/i })).toBeInTheDocument();
+  });
+
+  it('hides the ticket creation form when Jira is disconnected', async () => {
+    mockedRestore.mockResolvedValue(alice);
+    mockedGetJira.mockResolvedValue({ connected: false });
+
+    render(<App />);
+    await screen.findByText(/welcome, alice anderson/i);
+    await screen.findByText(/not connected to jira yet/i);
+
+    expect(screen.queryByLabelText(/project key/i)).not.toBeInTheDocument();
+  });
+
+  it('hides the ticket creation form while the connection status is loading', async () => {
+    mockedRestore.mockResolvedValue(alice);
+    mockedGetJira.mockReturnValue(new Promise(() => {}));
+
+    render(<App />);
+    await screen.findByText(/welcome, alice anderson/i);
+
+    expect(screen.queryByLabelText(/project key/i)).not.toBeInTheDocument();
+  });
+
+  it('hides the ticket creation form when the connection status fails to load', async () => {
+    mockedRestore.mockResolvedValue(alice);
+    mockedGetJira.mockRejectedValue(new JiraApiError('network', 'x'));
+
+    render(<App />);
+    await screen.findByText(/welcome, alice anderson/i);
+    await screen.findByText(/unable to reach the server/i);
+
+    expect(screen.queryByLabelText(/project key/i)).not.toBeInTheDocument();
   });
 });
 

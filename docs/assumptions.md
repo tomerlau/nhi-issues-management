@@ -1,7 +1,7 @@
 # Project Assumptions
 
 This document records the assumptions and tradeoffs relevant to the
-functionality implemented through the current milestone (Milestone 8). It grows
+functionality implemented through the current milestone (Milestone 9). It grows
 cumulatively as later milestones add functionality.
 
 ## Scope
@@ -24,6 +24,8 @@ cumulatively as later milestones add functionality.
   authenticated `POST /api/tickets` endpoint that creates a fixed-`Task` Jira
   issue against the tenant's shared connection and records local provenance for
   the created issue.
+- Milestone 9 adds the frontend ticket-creation UI on top of the Milestone 8
+  backend, without changing the backend ticket contract.
 - The optional blog digest is not part of the current implementation.
 
 ## Frontend
@@ -399,9 +401,65 @@ cumulatively as later milestones add functionality.
   separate from the generic 502 `jira_unreachable` used for a network error,
   malformed or rate-limited response, or 5xx. A missing encryption key or an
   undecryptable stored credential maps to HTTP 503 `jira_not_configured`.
-- **Deferred:** any frontend or ticket-creation UI; a recent-tickets list or
+- **Deferred (from Milestone 8):** a recent-tickets list or
   read/query endpoints; editing, deleting, or transitioning issues; external
   application API-key authentication; Jira project discovery or search;
   configurable issue types, custom fields, labels, components, or assignees;
   idempotency keys, retries, workers, queues, reconciliation, compensating
-  deletion, and webhooks; and Jira Server / Data Center support.
+  deletion, and webhooks; and Jira Server / Data Center support. The
+  ticket-creation UI, deferred here, is implemented in Milestone 9 (below).
+
+## Ticket creation UI (Milestone 9)
+
+- **Frontend only.** The UI consumes the unchanged Milestone 8 backend contract
+  (`POST /api/tickets`); no backend behavior changed and no new POC tradeoff is
+  introduced. The fixed-`Task` issue type, the not-idempotent sequential creation
+  flow, and the credential/availability error mapping are all the existing
+  Milestone 8 decisions above.
+- **The ticket form follows the established client boundary.** It sends only
+  `projectKey`, `title`, and `description`; the tenant, the creating user, the
+  connection, the site URL, and the issue type all come from the server-side
+  session and backend, never from the form. Form contents live only in transient
+  React state and are never written to `localStorage`, `sessionStorage`,
+  IndexedDB, cookies, the URL, or any global state.
+- **Client-side validation is a usability aid, not a security boundary.** It
+  mirrors the backend limits (project-key syntax and 2–10 length, non-empty title
+  ≤ 255, non-empty description ≤ 5000 with internal line breaks preserved) to
+  avoid an obviously invalid round-trip; the backend remains authoritative.
+- **Project keys are case-insensitive; entered casing is preserved while editing.**
+  The input shows exactly what the user types (lowercase or mixed case); the
+  frontend trims and uppercases only when validating and submitting, and the
+  backend independently trims and uppercases before its own validation. Lowercase
+  input such as `scrum` is valid and becomes the canonical `SCRUM`. Uppercase is
+  the canonical form used for consistency and provenance, not because Jira rejects
+  lowercase input.
+- **The form is shown only when the tenant connection has loaded as connected.**
+  The connection panel reports its loaded state upward through a small callback
+  and the shell gates the ticket panel on it, so no second connection-status
+  request is made. Connection management and ticket creation stay as separate
+  components; no global state, routing, or broad context abstraction is added.
+- **Uncertain outcomes surface the existing Milestone 8 duplicate-creation risk.**
+  Because ticket creation is not idempotent, *any* failure after the request
+  leaves the browser may have occurred after Jira already created the issue, so the
+  UI treats the whole class as uncertain rather than only upstream timeouts. This
+  covers the upstream `jira_timeout` and `jira_unreachable` outcomes, a
+  browser/network failure where the response was never observed, and any unexpected
+  or malformed server outcome — including a 500 `internal_error`, which by the
+  Milestone 8 design can mean Jira created the issue but the backend then failed
+  while recording provenance or building the response. For all of them the UI shows
+  a distinct warning that the ticket may already exist and that the user should
+  check Jira before retrying, because a retry may create a duplicate; the frontend
+  never retries a ticket creation automatically. Only definitive pre-creation
+  failures (validation, authentication, not-connected, inaccessible project,
+  unsupported `Task`, rejected credentials, not-configured) are treated as certain.
+  This presents the already-approved Milestone 8 POC tradeoff more conservatively;
+  it is not a new backend decision.
+- **Errors and status are safe by construction.** The UI maps backend error codes
+  to safe, category-specific copy, treats an expired session distinctly from
+  retryable failures, and never renders raw backend/Jira text, technical error
+  codes, credentials, session values, or internal IDs.
+- **Deferred:** Jira project discovery, search, or dropdown; issue-type selection
+  or configurable issue types; custom fields; a recent-tickets list or endpoint
+  integration; ticket links; ticket editing, deletion, or transitions; webhook
+  synchronization; external API-key authentication or an external REST API;
+  routing or global frontend state; and any later-milestone functionality.

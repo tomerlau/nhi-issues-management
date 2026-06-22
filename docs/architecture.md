@@ -1,7 +1,7 @@
 # Architecture
 
 This document describes the architecture that currently exists through
-Milestone 8. It intentionally avoids designing later domain layers in detail.
+Milestone 9. It intentionally avoids designing later domain layers in detail.
 
 ## Monorepo structure
 
@@ -707,3 +707,92 @@ M5 connection endpoint. The two 502 cases are deliberately distinguished: a
 rejection of the stored credentials returns `jira_credentials_rejected` so the
 caller knows to reconnect Jira, while a network error, malformed or rate-limited
 response, or 5xx returns the generic `jira_unreachable`.
+
+## Frontend ticket creation (Milestone 9)
+
+Milestone 9 adds the user-facing ticket-creation flow. It is **frontend only** and
+consumes the unchanged Milestone 8 `POST /api/tickets` contract; no backend
+behavior changed. The flow follows the same client boundary as the rest of the
+frontend: it holds no secrets, talks to the backend only over a relative `/api`
+request with the same-origin session cookie, and derives the tenant and creating
+user solely from the server-side session.
+
+### End-to-end flow
+
+```
+TicketCreationPanel (form: projectKey, title, description)
+  -> frontend ticket API module (src/api/tickets.ts: createTicket)
+  -> POST /api/tickets (relative, same-origin cookie, via the Vite proxy)
+  -> existing Milestone 8 backend ticket service
+  -> 201 { issueId, issueKey } | sanitized { error: { code } }
+```
+
+### Ticket API module
+
+`src/api/tickets.ts` mirrors the `auth.ts`/`jira.ts` style: a small, explicit
+module — not a generic client. It exposes `createTicket`, a `TicketCreationRequest`
+type, a `CreatedTicket` success type, a typed `TicketApiError`, a
+`messageForTicketError` helper mapping each error kind to safe generic copy, and an
+`isUncertainTicketOutcome` predicate. The request body carries exactly
+`projectKey`, `title`, and `description`; no tenant, user, connection, site, or
+issue-type field is ever sent, so the server-derived ownership boundary is intact
+from the browser down. It reads the structured `{ error: { code } }` envelope
+defensively and maps the documented codes (`invalid_request`, `unauthenticated`,
+`jira_not_connected`, `jira_project_inaccessible`, `jira_task_unsupported`,
+`jira_credentials_rejected`, `jira_unreachable`, `jira_timeout`,
+`jira_not_configured`, `internal_error`) plus transport and unexpected-status
+outcomes to distinct kinds. The success body is parsed through a guard that reads
+**only** non-empty string `issueId`/`issueKey`, so an unexpected or malformed body
+becomes a `server` error rather than a bad render. The backend *message* is always
+discarded, the module logs nothing, and it never retries — an unconfirmed creation
+must not be silently duplicated.
+
+### Ticket creation panel
+
+`src/components/TicketCreationPanel.tsx` owns the controlled `projectKey`/`title`/
+`description` fields (the project-key input preserves exactly the casing the user
+types and is normalized to uppercase only on submit), the submit lifecycle, and
+the success/error feedback. Project keys are case-insensitive: the frontend trims
+and uppercases the value when validating and submitting, and the backend
+independently trims and uppercases it before its own validation, so lowercase
+input such as `scrum` is valid and becomes the canonical `SCRUM`. Uppercase is the
+canonical form used for consistency and provenance, not because Jira rejects
+lowercase input. Client-side validation mirrors the backend limits (project-key
+syntax and 2–10 length, non-empty bounded title ≤ 255 and description ≤ 5000,
+internal description line breaks preserved) but is explicitly only a usability
+aid, not a security boundary — the backend stays authoritative. A client validation failure shows an inline `role="alert"` message
+and makes no network request. While a request is in flight all controls are
+disabled and a re-entrant submit is ignored, so duplicate submissions cannot
+produce more than one request. On HTTP 201 the panel announces the returned issue
+key through a `role="status"` region, clears the title and description, and keeps
+the project key so the user can file another ticket in the same project. Each
+documented failure renders safe, category-specific copy; an expired session is
+treated distinctly from retryable failures; and every *uncertain* outcome renders
+a distinct warning that Jira may already have created the issue and that the user
+should check Jira before retrying because a retry may create a duplicate. Because
+ticket creation is not idempotent, the uncertain class is not limited to upstream
+timeouts: it covers `jira_timeout`, the generic `jira_unreachable`, a
+browser/network failure after submission where the response is never observed,
+`internal_error` (which can mean Jira created the issue but the backend then failed
+to record provenance or build the response), and any malformed or unexpected
+server/success response. All of these may occur after Jira created the issue, so
+the UI warns the ticket may already exist, tells the user to check Jira before
+retrying, warns that retrying may create a duplicate, and never retries
+automatically — matching the approved Milestone 8 POC tradeoff that ticket
+creation is not idempotent. Raw backend/Jira text, technical
+error codes, credentials, session values, and internal IDs are never rendered, and
+form contents live only in transient React state (never browser storage, the URL,
+or global state).
+
+### Gating on the loaded connection state
+
+The ticket panel is shown only once the tenant's shared Jira connection has loaded
+successfully as *connected*. Rather than issuing a second connection-status
+request, `JiraConnectionPanel` reports its loaded connection state upward through a
+small `onConnectionChange` callback (it reports `false` while loading, on a
+status-load error, and when disconnected, and `true` once a connected status is
+loaded or a save succeeds). `AuthenticatedShell` holds that boolean and renders
+`TicketCreationPanel` only when it is `true`. This is a deliberately narrow local
+composition: connection management and ticket creation stay as separate
+components, and no global state, routing, or broad context abstraction is
+introduced.
