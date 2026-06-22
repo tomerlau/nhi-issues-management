@@ -15,15 +15,14 @@ export interface SafeUser {
 }
 
 /**
- * The distinct failure modes the UI must react to differently. `unauthenticated`
- * is a normal logged-out state during session restoration, never an error to
- * surface as a failure; `network` and `server` are genuine failures that must
- * not be mistaken for being logged out.
+ * The distinct authentication API failures the UI must react to differently.
+ * The normal logged-out state is not represented here: `restoreSession` returns
+ * `null` for an HTTP 401 rather than throwing. `network` and `server` are genuine
+ * failures that must not be mistaken for being logged out.
  */
 export type AuthErrorKind =
   | 'invalid_credentials'
   | 'invalid_request'
-  | 'unauthenticated'
   | 'network'
   | 'server';
 
@@ -166,9 +165,11 @@ export async function login(email: string, password: string): Promise<SafeUser> 
 }
 
 /**
- * Log out the current session. Resolves on success; rejects with an
- * {@link AuthError} on network or unexpected server failure so the UI can keep
- * the user authenticated rather than pretending the session was revoked.
+ * Log out the current session. Resolves only when the backend proves logout
+ * completed: an HTTP success status carrying exactly `{ status: "ok" }`. Network
+ * failure, a non-success status, or a success response whose body is malformed,
+ * non-JSON, or not `{ status: "ok" }` all reject with an {@link AuthError} so the
+ * UI keeps the user authenticated rather than pretending the session was revoked.
  */
 export async function logout(): Promise<void> {
   let response: Response;
@@ -183,6 +184,20 @@ export async function logout(): Promise<void> {
   }
 
   if (!response.ok) {
+    throw new AuthError('server', 'The server returned an unexpected response.');
+  }
+
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    throw new AuthError('server', 'The server returned an unexpected response.');
+  }
+  if (
+    typeof body !== 'object' ||
+    body === null ||
+    (body as { status?: unknown }).status !== 'ok'
+  ) {
     throw new AuthError('server', 'The server returned an unexpected response.');
   }
 }

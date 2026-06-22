@@ -128,7 +128,7 @@ describe('login', () => {
 });
 
 describe('logout', () => {
-  it('posts to /api/auth/logout and resolves on 200', async () => {
+  it('posts to /api/auth/logout and resolves on a valid { status: "ok" } body', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ status: 'ok' }));
 
     await expect(logout()).resolves.toBeUndefined();
@@ -146,6 +146,24 @@ describe('logout', () => {
 
   it('throws a server AuthError on an unexpected status', async () => {
     fetchMock.mockResolvedValue(jsonResponse({}, 500));
+
+    await expect(logout()).rejects.toMatchObject({ kind: 'server' });
+  });
+
+  it('throws a server AuthError on HTTP 200 with non-JSON content', async () => {
+    fetchMock.mockResolvedValue(new Response('not json', { status: 200 }));
+
+    await expect(logout()).rejects.toMatchObject({ kind: 'server' });
+  });
+
+  it('throws a server AuthError on HTTP 200 with a missing status', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({}));
+
+    await expect(logout()).rejects.toMatchObject({ kind: 'server' });
+  });
+
+  it('throws a server AuthError on HTTP 200 with an unexpected status value', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ status: 'nope' }));
 
     await expect(logout()).rejects.toMatchObject({ kind: 'server' });
   });

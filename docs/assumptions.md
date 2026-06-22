@@ -26,14 +26,6 @@ cumulatively as later milestones add functionality.
   `localStorage`, `sessionStorage`, the URL, or logs, and derives the
   authenticated user only from the backend session response. There is no UI to
   select or override a user or tenant id.
-- **POC choice:** authentication state is a small explicit state value in
-  `App.tsx` with focused login and shell components; styling is a single minimal
-  stylesheet.
-  - **Alternative:** a router, a global state library, and a component library or
-    design system.
-  - **Tradeoff:** the minimal approach keeps the shell easy to read and audit at
-    this scope, at the cost of features (routing, shared state) that are not yet
-    needed.
 
 ## Backend
 

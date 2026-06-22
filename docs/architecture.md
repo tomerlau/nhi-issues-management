@@ -20,8 +20,10 @@ because there is no genuine cross-application code to share.
 
 The frontend and backend are separate applications with separate dependency
 trees, build outputs, and lifecycles. They communicate only over HTTP. The
-frontend holds no backend secrets or configuration; the only thing it knows is
-the relative endpoint `/api/health`.
+frontend holds no backend secrets or configuration; it knows only relative `/api`
+endpoints — currently the authentication endpoints `/api/auth/*`. The backend
+health endpoint `/api/health` remains available separately for liveness checks
+and is not part of the frontend authentication flow.
 
 ## Local request flow
 
@@ -53,12 +55,13 @@ exposes `restoreSession`, `login`, and `logout`, each calling exactly one
 endpoint, plus a `SafeUser` type and a typed `AuthError`. It reads the structured
 `{ error: { code } }` envelope defensively (never trusting its shape) and the
 `{ user }` success envelope through a `SafeUser` type guard, so a malformed
-response becomes a `server` error rather than a bad render. Failures are mapped to
-distinct kinds — `unauthenticated`, `invalid_credentials`, `invalid_request`,
-`network`, `server` — and the backend's error *message* is deliberately discarded
-so raw server text never reaches the user. `restoreSession` accepts an
-`AbortSignal` and re-throws `AbortError` unwrapped so an unmounted initial load
-does not flip state.
+response becomes a `server` error rather than a bad render. The normal logged-out
+state is not an error: `restoreSession` returns `null` for an HTTP 401. Actual
+API failures are raised as a typed `AuthError` whose kind is one of
+`invalid_credentials`, `invalid_request`, `network`, or `server`, and the
+backend's error *message* is deliberately discarded so raw server text never
+reaches the user. `restoreSession` accepts an `AbortSignal` and re-throws
+`AbortError` unwrapped so an unmounted initial load does not flip state.
 
 ### Authentication state flow
 
@@ -88,10 +91,13 @@ is in flight, preventing duplicate submissions. Invalid credentials surface a
 single generic message, mirroring the backend's deliberate refusal to reveal
 whether an email exists.
 
-Logout posts to `POST /api/auth/logout`. On success the app returns to the login
-screen. On a network or server failure it keeps the authenticated state and shows
-a retryable error rather than pretending the session was revoked — the cookie and
-server-side session may still be live, so the UI must not claim otherwise.
+Logout posts to `POST /api/auth/logout`. Success requires both an HTTP success
+status and a body that is exactly `{ status: "ok" }`; a success status with a
+malformed, non-JSON, or unexpected body is treated as a `server` failure. Only a
+proven-complete logout returns the app to the login screen. On a network or
+server failure — including an unverifiable body — it keeps the authenticated
+state and shows a retryable error rather than pretending the session was revoked,
+since the cookie and server-side session may still be live.
 
 ### Why no token or credential is stored on the client
 
