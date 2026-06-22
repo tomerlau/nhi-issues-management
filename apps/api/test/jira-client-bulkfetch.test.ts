@@ -139,6 +139,17 @@ describe('JiraClient.bulkFetchIssues', () => {
       });
     });
 
+    it('rejects a non-empty but unparseable created timestamp without leaking it', async () => {
+      const fetchMock = vi.fn(async () =>
+        jsonResponse({
+          issues: [issuePayload('10001', 'ABC-1', 'Valid summary', 'not-a-date', 'ABC')],
+        }),
+      ) as unknown as FetchLike;
+      const result = await client(fetchMock).bulkFetchIssues(['10001']);
+      expect(result).toEqual({ ok: false, reason: 'unavailable' });
+      expect(JSON.stringify(result)).not.toContain('not-a-date');
+    });
+
     it('rejects invalid JSON without leaking the body', async () => {
       const fetchMock = vi.fn(
         async () =>

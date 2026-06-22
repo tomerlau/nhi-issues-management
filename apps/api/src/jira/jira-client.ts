@@ -223,7 +223,14 @@ function parseHydratedIssue(value: unknown): HydratedJiraIssue | null {
     return null;
   }
   const fieldRecord = fields as Record<string, unknown>;
-  if (!isNonEmptyString(fieldRecord.summary) || !isNonEmptyString(fieldRecord.created)) {
+  // `created` must be a non-empty string that parses as a real timestamp; a
+  // value like "not-a-date" must invalidate the whole response rather than reach
+  // the client. Jira's original string is preserved and returned unchanged.
+  if (
+    !isNonEmptyString(fieldRecord.summary) ||
+    !isNonEmptyString(fieldRecord.created) ||
+    Number.isNaN(Date.parse(fieldRecord.created))
+  ) {
     return null;
   }
   const project = fieldRecord.project;

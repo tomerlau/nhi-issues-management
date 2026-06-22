@@ -248,6 +248,24 @@ describe('recent tickets endpoint', () => {
       expect(JSON.stringify(res.body)).not.toContain('upstream boom');
     });
 
+    it('returns 502 jira_unreachable when a hydrated issue has an invalid created timestamp', async () => {
+      connectionId = storeConnection('tenant-acme', 'user-acme-alice');
+      seedProvenance('tenant-acme', 'user-acme-alice', connectionId, '10001', '2026-01-01T00:00:00.000Z');
+      const fetch = vi.fn(async () =>
+        jsonResponse({
+          issues: [issuePayload('10001', 'ABC-10001', 'Title 10001', 'not-a-date', 'ABC')],
+        }),
+      ) as unknown as FetchLike;
+      const app = appWith(db, { encryptionKey, fetch });
+      const agent = await loginAgent(app, acmeAlice);
+      const res = await agent.get('/api/tickets?projectKey=ABC');
+      expect(res.status).toBe(502);
+      expect(res.body.error.code).toBe('jira_unreachable');
+      const dump = JSON.stringify(res.body);
+      expect(dump).not.toContain('not-a-date');
+      expect(dump).not.toContain('Title 10001');
+    });
+
     it('returns 504 on a Jira timeout during hydration', async () => {
       connectionId = storeConnection('tenant-acme', 'user-acme-alice');
       seedProvenance('tenant-acme', 'user-acme-alice', connectionId, '10001', '2026-01-01T00:00:00.000Z');

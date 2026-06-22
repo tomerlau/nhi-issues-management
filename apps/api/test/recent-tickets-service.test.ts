@@ -166,24 +166,49 @@ describe('RecentTicketsService', () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
-  it('loads later batches when early candidates are all skipped', async () => {
-    // 30 candidates; Jira omits the first 25, so a second batch is needed.
-    for (let i = 0; i < 30; i += 1) {
-      const n = String(30000 + i);
-      seedProvenance(n, `2026-03-${String(i + 1).padStart(2, '0')}T00:00:00.000Z`);
+  it('fills the result from a later batch when the first batch is mostly skipped', async () => {
+    // 35 candidates ordered newest-first as 50034..50000 (ascending timestamps).
+    // The first internal batch of 25 covers ids 50034..50010; the second batch
+    // covers ids 50009..50000.
+    for (let i = 0; i < 35; i += 1) {
+      const n = String(50000 + i);
+      seedProvenance(n, `2026-07-01T00:00:00.${String(i).padStart(3, '0')}Z`);
     }
+
+    // The first batch hydrates only its three newest ids; everything else in the
+    // first batch is omitted (skipped). The second batch hydrates seven ids, which
+    // is exactly what is needed to bring the final result up to ten.
+    const firstBatchValid = ['50034', '50033', '50032'];
+    const secondBatchValid = ['50009', '50008', '50007', '50006', '50005', '50004', '50003'];
+    const allowed = new Set([...firstBatchValid, ...secondBatchValid]);
+
+    const requestedPerCall: string[][] = [];
     const fetch = vi.fn(async (_url: string, init?: RequestInit) => {
       const requestedIds = JSON.parse(init?.body as string).issueIdsOrKeys as string[];
-      // Only ids >= 30025 (the oldest five) hydrate; the newest 25 are omitted.
+      requestedPerCall.push(requestedIds);
       const issues = requestedIds
-        .filter((id) => Number(id) >= 30025)
-        .map((id) => issuePayload(id, `ABC-${id}`, `T-${id}`, '2026-03-01T00:00:00.000Z', 'ABC'));
+        .filter((id) => allowed.has(id))
+        .map((id) => issuePayload(id, `ABC-${id}`, `T-${id}`, '2026-07-01T12:00:00.000Z', 'ABC'));
       return jsonResponse({ issues });
     }) as unknown as FetchLike;
 
     const outcome = await service(fetch).listRecentTickets(ACME, { projectKey: 'ABC' });
-    expect(outcome.status === 'ok' && outcome.tickets).toHaveLength(5);
+
+    // Exactly two bulk-fetch calls: the first batch alone could not reach ten.
     expect(fetch).toHaveBeenCalledTimes(2);
+    // The second call requested the older candidates, proving the cursor advanced.
+    expect(requestedPerCall[0][0]).toBe('50034');
+    expect(requestedPerCall[1]).toEqual(['50009', '50008', '50007', '50006', '50005', '50004', '50003', '50002', '50001', '50000']);
+
+    expect(outcome.status).toBe('ok');
+    const ids = outcome.status === 'ok' ? outcome.tickets.map((t) => t.issueId) : [];
+    // Exactly ten tickets in local provenance order across both batches.
+    expect(ids).toEqual([...firstBatchValid, ...secondBatchValid]);
+    // At least one ticket genuinely came from the second batch.
+    expect(ids.some((id) => secondBatchValid.includes(id))).toBe(true);
+    // Skipped first-batch candidates never appear in the result.
+    expect(ids).not.toContain('50020');
+    expect(ids).not.toContain('50010');
   });
 
   it('loads the connection once and reuses one client and origin for all batches', async () => {
