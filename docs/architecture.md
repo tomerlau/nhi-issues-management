@@ -450,10 +450,12 @@ id or a sanitized `credentials_rejected` / `timeout` / `unavailable` failure.
 `GET /rest/api/3/project/{projectIdOrKey}?expand=issueTypes`, validates the
 response shape, returns the project id, canonical key, and the id of the
 non-subtask issue type named exactly `Task`, or a sanitized failure
-distinguishing `project_inaccessible` (404), `task_unsupported` (no normal
-`Task`), `credentials_rejected` (401/403), `timeout`, and `unavailable`
-(redirects, 429, 5xx, network errors, malformed JSON, and malformed success
-shapes). A project whose only `Task` is a subtask is **not** accepted.
+distinguishing `project_inaccessible` (403 or 404 — the authenticated account
+cannot reach the project), `task_unsupported` (no normal `Task`),
+`credentials_rejected` (401), `timeout`, and `unavailable` (redirects, 429, 5xx,
+network errors, malformed JSON, and malformed success shapes). A project whose
+only `Task` is a subtask is **not** accepted. (Credential verification via
+`loadAccountIdentity()` still treats both 401 and 403 as `credentials_rejected`.)
 
 ### The credential verifier reuses the client
 

@@ -82,6 +82,14 @@ describe('JiraClient', () => {
       });
     });
 
+    it('maps 403 to credentials_rejected (credential verification treats it as rejected)', async () => {
+      const fetchMock = vi.fn(async () => new Response('', { status: 403 })) as FetchLike;
+      expect(await client(fetchMock).loadAccountIdentity()).toEqual({
+        ok: false,
+        reason: 'credentials_rejected',
+      });
+    });
+
     it('maps a missing accountId shape to unavailable', async () => {
       const fetchMock = vi.fn(async () => jsonResponse({ displayName: 'Alice' })) as FetchLike;
       expect(await client(fetchMock).loadAccountIdentity()).toEqual({ ok: false, reason: 'unavailable' });
@@ -134,6 +142,14 @@ describe('JiraClient', () => {
       expect(await client(fetchMock).validateProject('ABC')).toEqual({
         ok: false,
         reason: 'credentials_rejected',
+      });
+    });
+
+    it('maps 403 to project_inaccessible (account cannot access the project, not bad credentials)', async () => {
+      const fetchMock = vi.fn(async () => new Response('', { status: 403 })) as FetchLike;
+      expect(await client(fetchMock).validateProject('ABC')).toEqual({
+        ok: false,
+        reason: 'project_inaccessible',
       });
     });
 

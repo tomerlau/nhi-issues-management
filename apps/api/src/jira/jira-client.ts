@@ -56,10 +56,19 @@ export type ProjectValidationResult =
         | 'unavailable';
     };
 
-/** Sanitized low-level outcome of a single Jira request, with the body parsed on success. */
+/**
+ * Sanitized low-level outcome of a single Jira request, with the body parsed on
+ * success. The failure reasons are deliberately HTTP-shaped (`unauthorized` vs
+ * `forbidden` kept distinct) so each public operation can apply its own contract:
+ * `/myself` treats both as rejected credentials, while project validation treats
+ * a 403 as an inaccessible project rather than invalid credentials.
+ */
 type RequestOutcome =
   | { ok: true; body: unknown }
-  | { ok: false; reason: 'rejected' | 'not_found' | 'timeout' | 'unavailable' };
+  | {
+      ok: false;
+      reason: 'unauthorized' | 'forbidden' | 'not_found' | 'timeout' | 'unavailable';
+    };
 
 interface JiraIssueType {
   id: string;
@@ -151,15 +160,18 @@ export class JiraClient {
   async loadAccountIdentity(): Promise<AccountIdentityResult> {
     const outcome = await this.request('/rest/api/3/myself');
     if (!outcome.ok) {
-      // /myself never legitimately 404s; a not_found is treated as unavailable.
-      return {
-        ok: false,
-        reason: outcome.reason === 'rejected'
-          ? 'credentials_rejected'
-          : outcome.reason === 'timeout'
-            ? 'timeout'
-            : 'unavailable',
-      };
+      switch (outcome.reason) {
+        // Credential verification treats both 401 and 403 as rejected credentials.
+        case 'unauthorized':
+        case 'forbidden':
+          return { ok: false, reason: 'credentials_rejected' };
+        case 'timeout':
+          return { ok: false, reason: 'timeout' };
+        // /myself never legitimately 404s; not_found is treated as unavailable.
+        case 'not_found':
+        case 'unavailable':
+          return { ok: false, reason: 'unavailable' };
+      }
     }
     const accountId = extractAccountId(outcome.body);
     if (accountId === null) {
@@ -182,8 +194,11 @@ export class JiraClient {
     const outcome = await this.request(path);
     if (!outcome.ok) {
       switch (outcome.reason) {
-        case 'rejected':
+        case 'unauthorized':
           return { ok: false, reason: 'credentials_rejected' };
+        // A 403 means the authenticated account cannot access this project, not
+        // that the Jira credentials themselves are invalid.
+        case 'forbidden':
         case 'not_found':
           return { ok: false, reason: 'project_inaccessible' };
         case 'timeout':
@@ -233,8 +248,11 @@ export class JiraClient {
         };
       }
 
-      if (response.status === 401 || response.status === 403) {
-        return { ok: false, reason: 'rejected' };
+      if (response.status === 401) {
+        return { ok: false, reason: 'unauthorized' };
+      }
+      if (response.status === 403) {
+        return { ok: false, reason: 'forbidden' };
       }
       if (response.status === 404) {
         return { ok: false, reason: 'not_found' };
