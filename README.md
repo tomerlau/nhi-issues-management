@@ -1,4 +1,4 @@
-# IdentityHub to Jira
+# NHI Issues Management
 
 A focused proof of concept for integrating Oasis Security IdentityHub with Jira.
 
@@ -601,7 +601,7 @@ The Atlassian API token is treated as a secret in the form:
   never retried automatically: a completed POST attempt (successful or failed)
   requires re-entering the token.
 - `siteUrl` and `email` use ordinary local React state.
-- The Jira fields are kept independent of the IdentityHub login form so a browser
+- The Jira fields are kept independent of the application login form so a browser
   password manager does not autofill them: the form carries `autocomplete="off"`,
   the inputs use Jira-specific names (`jiraSiteUrl`, `jiraAccountEmail`,
   `jiraApiToken`), the email input is `type="text"` with `inputMode="email"` plus
@@ -628,9 +628,9 @@ a real Jira Cloud site, account email, and **unscoped** API token.
    The Jira panel loads the **disconnected** state. Enter a valid Jira site URL,
    Atlassian email, and unscoped API token, and connect. Confirm the panel shows
    the **connected** state with the safe site URL and email only.
-   - **Autofill independence.** With the IdentityHub login credentials saved in
+   - **Autofill independence.** With the application login credentials saved in
      Chrome's password manager, open or reload the Jira connection form and
-     confirm all three Jira fields stay empty — the saved IdentityHub password
+     confirm all three Jira fields stay empty — the saved application password
      must not be inserted into the API-token field, and the email field must not
      be prefilled with the signed-in user. Then enter valid Jira credentials
      manually and confirm the connection still succeeds.

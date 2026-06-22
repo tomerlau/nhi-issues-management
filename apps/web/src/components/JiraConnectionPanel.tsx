@@ -159,10 +159,6 @@ export default function JiraConnectionPanel() {
   return (
     <section className="jira-panel" aria-labelledby={headingId}>
       <h2 id={headingId}>Jira connection</h2>
-      <p className="jira-shared-note">
-        The Jira connection is shared by everyone in your tenant. Connecting or
-        replacing it changes the integration for all users in your organization.
-      </p>
 
       {notice && (
         <p className="form-success" role="status">
@@ -172,9 +168,10 @@ export default function JiraConnectionPanel() {
 
       {connection.connected ? (
         <div className="jira-status jira-status-connected">
-          <p>
-            <span className="jira-badge">Connected</span> Your tenant is connected
-            to Jira.
+          <p className="jira-connection-state">
+            <span className="jira-status-indicator" aria-hidden="true" />
+            <span className="jira-status-label">Connected</span>
+            <span>Your tenant is connected to Jira.</span>
           </p>
           <dl className="jira-details">
             <div>
@@ -306,6 +303,11 @@ export default function JiraConnectionPanel() {
           </div>
         </form>
       )}
+
+      <p className="jira-shared-note">
+        The Jira connection is shared by everyone in your tenant. Connecting or
+        replacing it changes the integration for all users in your organization.
+      </p>
     </section>
   );
 }

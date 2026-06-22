@@ -57,6 +57,28 @@ afterEach(() => {
   cleanup();
 });
 
+describe('product branding', () => {
+  it('uses the product name in the login heading and not the old name', async () => {
+    await renderLoggedOut();
+
+    expect(
+      screen.getByRole('heading', { name: /sign in to NHI Issues Management/i }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/IdentityHub to Jira/i)).not.toBeInTheDocument();
+  });
+
+  it('uses the product name in the authenticated header and subtitle', async () => {
+    mockedRestore.mockResolvedValue(alice);
+
+    render(<App />);
+    await screen.findByText(/welcome, alice anderson/i);
+
+    expect(within(screen.getByRole('banner')).getByText('NHI Issues Management')).toBeInTheDocument();
+    expect(screen.getByText('You are signed in to NHI Issues Management.')).toBeInTheDocument();
+    expect(screen.queryByText(/IdentityHub to Jira/i)).not.toBeInTheDocument();
+  });
+});
+
 describe('session restoration', () => {
   it('shows a loading state while restoration is pending', () => {
     mockedRestore.mockReturnValue(new Promise(() => {}));

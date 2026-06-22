@@ -45,7 +45,7 @@ export default function AuthenticatedShell({ user, onLoggedOut }: AuthenticatedS
   return (
     <div className="app-shell">
       <header className="app-header">
-        <span className="app-name">IdentityHub to Jira</span>
+        <span className="app-name">NHI Issues Management</span>
         <div className="app-user">
           <span className="user-name">{user.displayName}</span>
           <span className="user-email">{user.email}</span>
@@ -57,7 +57,7 @@ export default function AuthenticatedShell({ user, onLoggedOut }: AuthenticatedS
 
       <main className="app-main">
         <h1>Welcome, {user.displayName}</h1>
-        <p>You are signed in to IdentityHub to Jira.</p>
+        <p>You are signed in to NHI Issues Management.</p>
         {error && (
           <p className="form-error" role="alert">
             {error}

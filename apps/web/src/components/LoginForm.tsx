@@ -66,7 +66,7 @@ export default function LoginForm({ onAuthenticated }: LoginFormProps) {
 
   return (
     <main className="auth-card" aria-labelledby={`${emailId}-heading`}>
-      <h1 id={`${emailId}-heading`}>Sign in to IdentityHub to Jira</h1>
+      <h1 id={`${emailId}-heading`}>Sign in to NHI Issues Management</h1>
       <form className="auth-form" onSubmit={handleSubmit} noValidate>
         <div className="field">
           <label htmlFor={emailId}>Email</label>

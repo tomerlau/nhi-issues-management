@@ -298,6 +298,54 @@ describe('failed replacement keeps the existing connection', () => {
   });
 });
 
+describe('tenant-sharing disclaimer placement', () => {
+  function disclaimer() {
+    return screen.getByText(/shared by everyone in your tenant/i);
+  }
+
+  it('renders the disclaimer after the connection form in DOM order (disconnected)', async () => {
+    await renderDisconnected();
+
+    const form = screen.getByLabelText(/api token/i).closest('form');
+    expect(form).not.toBeNull();
+    // Node.DOCUMENT_POSITION_FOLLOWING (4) means the disclaimer comes after the form.
+    expect(form!.compareDocumentPosition(disclaimer())).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+  });
+
+  it('renders the disclaimer after the connected summary and action (connected)', async () => {
+    await renderConnected();
+
+    const replace = screen.getByRole('button', { name: /replace connection/i });
+    expect(replace.compareDocumentPosition(disclaimer())).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+  });
+
+  it('keeps the disclaimer at the bottom while the replacement form is open', async () => {
+    await renderConnected();
+
+    fireEvent.click(screen.getByRole('button', { name: /replace connection/i }));
+    const form = screen.getByLabelText(/api token/i).closest('form');
+    expect(form!.compareDocumentPosition(disclaimer())).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+  });
+});
+
+describe('connected status is non-interactive', () => {
+  it('shows visible "Connected" text that is not a button', async () => {
+    await renderConnected();
+
+    const label = screen.getByText('Connected');
+    expect(label).toBeInTheDocument();
+    expect(label.closest('button')).toBeNull();
+    // The only button in the connected summary is the replace action.
+    expect(screen.getByRole('button', { name: /replace connection/i })).toBeInTheDocument();
+  });
+});
+
 describe('autofill mitigation: Jira fields are independent of the login form', () => {
   it('marks the form with autocomplete="off"', async () => {
     await renderDisconnected();
