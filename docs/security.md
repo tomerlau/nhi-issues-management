@@ -35,8 +35,7 @@ external API contract see [api.md](api.md).
   manage parameters itself.
 - Login distinguishes only `valid credentials` from `invalid credentials`.
   Unknown email, missing credential row, and wrong password all return the
-  same generic HTTP 401 `invalid_credentials`, so a client cannot probe which
-  emails exist.
+  same generic HTTP 401 `invalid_credentials`, so the response body does not disclose whether an email exists.
 
 ## Tenant and user isolation
 
