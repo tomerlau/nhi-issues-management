@@ -23,7 +23,7 @@ resulting tradeoffs. Behavior already described elsewhere
   in a git-ignored environment file.** `npm run setup` writes the key to
   `apps/api/.env` only when one is not already present and valid; it never
   prints the value. *Production alternative*: managed secret provisioning and
-  KMS-backed envelope encryption with rotation. *Tradeoff*: minimal reviewer
+  KMS-backed envelope encryption with rotation. *Tradeoff*: minimal local
   setup, but the key lifecycle is tied to the local filesystem — losing the
   file makes existing encrypted Jira credentials undecryptable, forcing
   reconnection.
@@ -74,8 +74,10 @@ resulting tradeoffs. Behavior already described elsewhere
 
 ## Jira connection
 
-- **API-token connection (unscoped Atlassian API token).** The reviewer
-  confirmed either API token or OAuth 2.0 / 3LO is acceptable; the simpler
+- **API-token connection (unscoped Atlassian API token).** OAuth 2.0 Authorization
+  Code Flow (3LO) would be the preferred production approach, but a manually
+  generated unscoped Atlassian API token was used for this time-boxed POC
+  to keep the implementation and local setup focused; the simpler
   API token was chosen. *Production alternative*: Atlassian OAuth 2.0
   Authorization Code Flow (3LO) with refresh tokens. *Tradeoff*: significantly
   reduced setup and implementation complexity; the application receives and

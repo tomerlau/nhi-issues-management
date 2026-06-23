@@ -173,9 +173,12 @@ The Jira HTTP client targets only the already-validated direct
 - **No HTTPS/TLS on local development.** Local access is over plain HTTP on
   `localhost`. *Production alternative*: terminate TLS at the edge and run
   the API on HTTPS; set `NODE_ENV=production` so the cookie is `Secure`.
-- **API token instead of OAuth 2.0 / 3LO.** The reviewer confirmed either
-  approach is acceptable. *Production alternative*: Atlassian OAuth 2.0
-  Authorization Code Flow.
+- **API token instead of OAuth 2.0 / 3LO.** Atlassian OAuth 2.0 Authorization
+  Code Flow (3LO) would be the preferred production approach because it
+  provides delegated authorization and managed token lifecycle without
+  requiring users to paste a long-lived credential. Due to the time-boxed
+  scope of this POC, the integration uses a manually generated unscoped
+  Atlassian API token instead.
 - **Local encryption key instead of a managed KMS.** *Production
   alternative*: a managed key service (e.g. AWS KMS) with envelope encryption
   and rotation.
@@ -202,8 +205,7 @@ tradeoffs.
 ## Known POC security limitations
 
 Two hardening items were considered for this submission and intentionally
-deferred to avoid late-stage regressions. They are recorded here so a
-reviewer or successor can pick them up.
+deferred to avoid late-stage regressions.
 
 ### Login timing differences
 
@@ -216,14 +218,14 @@ reviewer or successor can pick them up.
 - **Possible risk.** This creates a *coarse timing difference* that could
   theoretically assist user enumeration if a determined caller can measure
   many requests carefully. It is not a constant-time authentication path,
-  and the POC does not claim to be one.
+  and the authentication path is therefore not constant-time
 - **Production hardening alternative.** Use a single fixed, valid Argon2id
   *dummy* hash. On every validly shaped login attempt, select either the
   real stored hash (when the user and credential exist) or the dummy hash
   (when they do not) and perform exactly one `verifyPassword` call. The
   generic `invalid_credentials` response is preserved unchanged on failure.
-- **Status.** Documented but **intentionally not implemented** in this
-  submission to avoid introducing late-stage authentication regressions.
+- **Status.** Documented but not implemented in this time-boxed POC 
+  to avoid introducing late-stage authentication regressions.
 
 ### Local API network binding
 
@@ -235,13 +237,12 @@ reviewer or successor can pick them up.
   frontend at `http://localhost:5173` and the `/api` dev proxy.
 - **Possible risk.** Depending on host configuration, the unauthenticated
   health endpoint and the authenticated API routes may be reachable from
-  the local network (not from the public internet). The session cookie
+  other devices on the local network.The session cookie
   and API-key checks still enforce authentication; the concern is exposure
   surface, not authorization bypass.
 - **Production / local-hardening alternative.** Bind explicitly to
   `127.0.0.1` for local-only execution, and/or enforce the intended
   network boundary at a higher layer (container networking, host firewall
   rules, or production ingress configuration that fronts the API).
-- **Status.** Documented but **intentionally not implemented** at this
-  late stage to avoid setup and cross-platform regressions in the
-  submission.
+- **Status.** Documented but not implemented in this time-boxed to avoid
+  setup and cross-platform regressions in the submission.

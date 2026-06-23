@@ -87,8 +87,8 @@ hashes.
 
 ### Jira authentication choice
 
-The POC uses a manually generated Atlassian API token because it keeps local
-setup and reviewer validation straightforward: a single value pasted into
+The POC uses a manually generated Atlassian API token because it keeps
+local setup and end-to-end validation straightforward: a single value pasted into
 the Jira connection form is enough to exercise the full integration.
 
 A production implementation would generally prefer **OAuth 2.0 Authorization
