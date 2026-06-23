@@ -19,6 +19,10 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 const KEY_PREFIX = 'nhi_';
 const KEY_ID_BYTES = 16;
 const SECRET_BYTES = 32;
+// 16 raw bytes → 22 base64url chars (no padding); 32 raw bytes → 43 base64url chars.
+const KEY_ID_BASE64URL_LEN = 22;
+const SECRET_BASE64URL_LEN = 43;
+const BASE64URL_RE = /^[A-Za-z0-9_-]+$/;
 
 export interface ParsedApiKey {
   keyId: string;
@@ -47,16 +51,16 @@ export function parseApiKey(rawKey: string): ParsedApiKey | null {
   }
   const body = rawKey.slice(KEY_PREFIX.length);
   const dotIndex = body.indexOf('.');
-  if (dotIndex <= 0) {
+  // The dot separator must appear at exactly the expected keyId length position.
+  if (dotIndex !== KEY_ID_BASE64URL_LEN) {
     return null;
   }
   const keyId = body.slice(0, dotIndex);
   const secret = body.slice(dotIndex + 1);
-  if (!keyId || !secret) {
+  if (secret.length !== SECRET_BASE64URL_LEN) {
     return null;
   }
-  // "." must not appear in the secret (base64url never contains ".").
-  if (secret.includes('.')) {
+  if (!BASE64URL_RE.test(keyId) || !BASE64URL_RE.test(secret)) {
     return null;
   }
   return { keyId, secret };

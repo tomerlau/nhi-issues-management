@@ -524,3 +524,33 @@ cumulatively as later milestones add functionality.
   limits, sorting, or filtering beyond the single `projectKey`; full-text search or
   Jira project discovery; caching or background refresh of hydrated issues; editing,
   deleting, or transitioning issues; and Jira Server / Data Center support.
+
+## API-key authentication (Milestone 12)
+
+- **API keys are owned by one application user and tenant.** Ownership is stored at
+  creation time and derived only from stored key metadata on each request. Request
+  input (headers, body, query, path) cannot override it.
+- **Keys use random high-entropy secrets and hash-only storage.** Each key has a
+  16-byte random public ID (base64url, 22 chars) and a 32-byte random secret
+  (base64url, 43 chars, ≥ 256 bits of entropy). Only the SHA-256 hash of the secret
+  is persisted. The plaintext full key is shown exactly once during local
+  provisioning and cannot be recovered.
+- **Key format: `nhi_<keyId>.<secret>`.** `.` is not in the base64url alphabet, so
+  the format is unambiguous regardless of base64url characters in the components.
+- **Plaintext is shown only during local provisioning.** The create CLI prints the
+  full key once with a clear warning that it cannot be retrieved again.
+- **The POC has no automatic expiration or rotation.** Keys remain valid until
+  explicitly revoked. Production alternatives include time-bounded tokens, automatic
+  rotation, last-used tracking, and administrative key management.
+- **Revocation physically deletes the record; no revocation history is retained.**
+  After revocation, the key ID is permanently indistinguishable from an unknown key,
+  and no tombstone, `revoked_at` value, secret hash, or audit history is kept.
+- **No external ticket REST endpoint in M12.** M13 will add the external ticket
+  creation endpoint that uses API-key authentication. M12 only provides the
+  authentication infrastructure.
+- **Production alternatives:** expiration and automatic rotation; audit history and
+  last-used tracking; managed key administration UI; rate limiting and scoped
+  permissions per key; dedicated secrets management service.
+- **Deferred:** API-key management UI, create/revoke REST endpoints, external ticket
+  endpoint (M13), caller-selected tenant/user, key listing, `revoked_at`/soft-delete,
+  expiration, rotation, `last_used_at`, roles/administrator model.

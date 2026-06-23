@@ -83,6 +83,66 @@ describe('API key token: parsing', () => {
   });
 });
 
+describe('API key token: strict format enforcement', () => {
+  it('returns null when keyId is too short (< 22 chars)', () => {
+    // 21-char keyId, valid 43-char secret.
+    expect(parseApiKey('nhi_' + 'a'.repeat(21) + '.' + 'b'.repeat(43))).toBeNull();
+  });
+
+  it('returns null when keyId is too long (> 22 chars)', () => {
+    expect(parseApiKey('nhi_' + 'a'.repeat(23) + '.' + 'b'.repeat(43))).toBeNull();
+  });
+
+  it('returns null when secret is too short (< 43 chars)', () => {
+    expect(parseApiKey('nhi_' + 'a'.repeat(22) + '.' + 'b'.repeat(42))).toBeNull();
+  });
+
+  it('returns null when secret is too long (> 43 chars)', () => {
+    expect(parseApiKey('nhi_' + 'a'.repeat(22) + '.' + 'b'.repeat(44))).toBeNull();
+  });
+
+  it('returns null when keyId contains an invalid character (+)', () => {
+    const validSecret = 'b'.repeat(43);
+    // Replace one char in the 22-char keyId with '+'.
+    const badKeyId = 'a'.repeat(21) + '+';
+    expect(parseApiKey('nhi_' + badKeyId + '.' + validSecret)).toBeNull();
+  });
+
+  it('returns null when keyId contains an invalid character (/)', () => {
+    const badKeyId = 'a'.repeat(21) + '/';
+    expect(parseApiKey('nhi_' + badKeyId + '.' + 'b'.repeat(43))).toBeNull();
+  });
+
+  it('returns null when secret contains an invalid character (+)', () => {
+    const badSecret = 'b'.repeat(42) + '+';
+    expect(parseApiKey('nhi_' + 'a'.repeat(22) + '.' + badSecret)).toBeNull();
+  });
+
+  it('returns null when keyId contains base64 padding (=)', () => {
+    const paddedKeyId = 'a'.repeat(20) + '==';
+    expect(parseApiKey('nhi_' + paddedKeyId + '.' + 'b'.repeat(43))).toBeNull();
+  });
+
+  it('returns null when secret contains base64 padding (=)', () => {
+    const paddedSecret = 'b'.repeat(41) + '==';
+    expect(parseApiKey('nhi_' + 'a'.repeat(22) + '.' + paddedSecret)).toBeNull();
+  });
+
+  it('returns null when keyId contains whitespace', () => {
+    const spaceKeyId = 'a'.repeat(21) + ' ';
+    expect(parseApiKey('nhi_' + spaceKeyId + '.' + 'b'.repeat(43))).toBeNull();
+  });
+
+  it('accepts exactly 22-char keyId and 43-char secret with valid charset', () => {
+    // Construct a key that matches the required format but is not in the DB.
+    const validKey = 'nhi_' + 'a'.repeat(22) + '.' + 'b'.repeat(43);
+    const parsed = parseApiKey(validKey);
+    expect(parsed).not.toBeNull();
+    expect(parsed?.keyId).toHaveLength(22);
+    expect(parsed?.secret).toHaveLength(43);
+  });
+});
+
 describe('API key token: hashing and verification', () => {
   it('hashApiKeySecret returns a 64-char hex string (SHA-256)', () => {
     const hash = hashApiKeySecret('some-secret');
