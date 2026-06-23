@@ -39,6 +39,13 @@ export default function AuthenticatedShell({ user, onLoggedOut }: AuthenticatedS
     setJiraConnected(connected);
   }, []);
 
+  // Increment refreshKey after a successful Jira connection creation or
+  // replacement so the recent-tickets panel immediately invalidates its current
+  // results and re-fetches against the new connection.
+  const handleConnectionSaved = useCallback(() => {
+    setRefreshKey((k) => k + 1);
+  }, []);
+
   const handleProjectKeyChange = useCallback((key: string) => {
     setProjectKey(key);
   }, []);
@@ -87,7 +94,10 @@ export default function AuthenticatedShell({ user, onLoggedOut }: AuthenticatedS
             {error}
           </p>
         )}
-        <JiraConnectionPanel onConnectionChange={handleConnectionChange} />
+        <JiraConnectionPanel
+          onConnectionChange={handleConnectionChange}
+          onConnectionSaved={handleConnectionSaved}
+        />
         {jiraConnected && (
           <>
             <TicketCreationPanel

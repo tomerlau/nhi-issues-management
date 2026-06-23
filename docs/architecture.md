@@ -793,10 +793,19 @@ request, `JiraConnectionPanel` reports its loaded connection state upward throug
 small `onConnectionChange` callback (it reports `false` while loading, on a
 status-load error, and when disconnected, and `true` once a connected status is
 loaded or a save succeeds). `AuthenticatedShell` holds that boolean and renders
-`TicketCreationPanel` only when it is `true`. This is a deliberately narrow local
-composition: connection management and ticket creation stay as separate
-components, and no global state, routing, or broad context abstraction is
-introduced.
+both the ticket-creation and recent-tickets panels only when it is `true`.
+
+`JiraConnectionPanel` also exposes an `onConnectionSaved` callback, called after
+a successful connection creation or replacement (never after a failure). The shell
+increments `refreshKey` in response, which causes `RecentTicketsPanel` to abort
+any active request, enter loading state, and immediately re-fetch against the new
+Jira connection. This ensures old-site ticket links disappear when the tenant
+switches Jira sites, without issuing another connection-status request or exposing
+any credential or raw connection data to the ticket panel.
+
+This is a deliberately narrow local composition: connection management, ticket
+creation, and the recent-ticket list stay as separate components, and no global
+state, routing, or broad context abstraction is introduced.
 
 ## Recent tickets backend (Milestone 10)
 
@@ -895,14 +904,20 @@ Milestone 11 lifts it to `AuthenticatedShell`, where it is shared between the
 creation panel and the new recent-tickets panel. The shell owns two pieces of
 state: the raw project-key string and an integer `refreshKey`.
 
-`handleProjectKeyChange` is a stable `useCallback` that calls `setProjectKey`;
-`handleTicketCreated` is a stable `useCallback` that increments `refreshKey`.
-Both are stable across renders, so neither child re-renders solely because the
-parent re-renders. `TicketCreationPanel` receives `projectKey`,
-`onProjectKeyChange`, and `onTicketCreated` as props; it calls
-`onProjectKeyChange` with the normalized key after a successful creation and
-calls `onTicketCreated` to signal the refresh. Both panels are rendered inside
-the same `jiraConnected` guard, so the state is only ever live when it matters.
+`handleProjectKeyChange`, `handleTicketCreated`, and `handleConnectionSaved`
+are each wrapped in `useCallback`. This keeps their references stable across
+shell re-renders, which matters because `doFetch` in `RecentTicketsPanel` is
+itself a stable `useCallback` that lists `projectKey`-effect callbacks as
+dependencies — a changing reference would cause the projectKey effect to re-run
+unnecessarily. `TicketCreationPanel` receives `projectKey`, `onProjectKeyChange`,
+and `onTicketCreated` as props; it calls `onProjectKeyChange` with the
+normalized key after a successful creation and calls `onTicketCreated` to signal
+the refresh. Both panels are rendered inside the same `jiraConnected` guard, so
+the state is only ever live when it matters.
+
+`handleConnectionSaved` increments `refreshKey` after `JiraConnectionPanel`
+reports a successful connection creation or replacement, triggering an immediate
+re-fetch against the new Jira site. A failed save never calls the callback.
 
 ### Shared project-key utility
 
@@ -950,18 +965,23 @@ consistent, fully-validated list.
 { type: 'prompt' } | { type: 'loading' } | { type: 'success'; tickets } | { type: 'error'; kind }
 ```
 
-**Debouncing vs. immediate refresh:** the component uses two `useEffect` hooks:
+**Debouncing vs. immediate refresh:** the component uses three `useEffect` hooks:
 
+- *Effect 0* (empty deps, unmount only): runs no body; its cleanup aborts any
+  active request and clears any pending debounce timer when the component
+  unmounts, preventing state updates after removal.
 - *Effect 1* responds to `projectKey` changes. When the normalized key is
-  invalid it sets `prompt` state immediately and cancels any pending debounce.
-  When the key is valid it sets `loading` state immediately (so the UI is
-  responsive from the first render) and starts a 400 ms debounce timer; when
-  the timer fires it calls `doFetch`.
+  invalid it aborts any active request and resets to `prompt` state immediately.
+  When the key is valid it **aborts any active request immediately** and sets
+  `loading` state, then starts a 400 ms debounce timer; when the timer fires it
+  calls `doFetch`. Aborting the old request before the debounce fires is the key
+  invariant that prevents a stale response from the previous project overwriting
+  the `loading` state during the debounce window.
 - *Effect 2* responds to `refreshKey` changes. It skips the initial render
-  (`refreshKey === 0`). On a positive increment it cancels any pending debounce,
-  reads the current project key from a ref (`projectKeyRef.current`), and calls
-  `doFetch` immediately — bypassing the 400 ms wait so the new ticket appears
-  without delay.
+  (`refreshKey === 0`). On a positive increment (signalling a successful ticket
+  creation or Jira connection save) it cancels any pending debounce, reads the
+  current project key from a ref (`projectKeyRef.current`), and calls `doFetch`
+  immediately — bypassing the 400 ms wait.
 
 `projectKeyRef` is kept in sync during the render body (`projectKeyRef.current =
 projectKey`), so the refreshKey effect always reads the latest project key
@@ -973,10 +993,12 @@ extra fetch on every key change.
 starting a new request. Both the `.then` and `.catch` handlers check
 `controller.signal.aborted` before updating state, so a response that arrives
 after the project key changed (or after the component unmounts) is silently
-dropped. An `AbortError` is not mapped to an error state.
+dropped. An `AbortError` is not mapped to an error state. Together, the
+immediate abort in Effect 1 and the stale check in `doFetch` ensure a response
+from any previous project can never become visible.
 
-**Rendering:** the success state renders an ordered `<ul>` of tickets. Each
-item shows the issue key in a monospace span, the title as an `<a>` link with
+**Rendering:** the success state renders an `<ol>` of tickets. Each item shows
+the issue key in a monospace span, the title as an `<a>` link with
 `target="_blank" rel="noopener noreferrer"`, and a `<time>` element with the
 ISO `dateTime` attribute. The error state renders a `role="alert"` region
 containing a safe copy paragraph and a **Retry** button that calls `doFetch`

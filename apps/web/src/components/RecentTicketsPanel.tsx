@@ -71,6 +71,17 @@ export default function RecentTicketsPanel({ projectKey, refreshKey }: RecentTic
       });
   }, []);
 
+  // Abort any active request and clear any pending debounce on unmount so state
+  // updates never fire after the component is removed from the tree.
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current !== null) {
+        clearTimeout(debounceRef.current);
+      }
+      abortRef.current?.abort();
+    };
+  }, []);
+
   // React to project-key changes with a debounce. Switching to an invalid key
   // cancels any pending request and resets to the prompt state immediately.
   useEffect(() => {
@@ -88,6 +99,12 @@ export default function RecentTicketsPanel({ projectKey, refreshKey }: RecentTic
       return;
     }
 
+    // Abort any in-flight request immediately when the project key changes, so
+    // a stale response cannot arrive and overwrite the loading state during the
+    // 400 ms debounce window.
+    abortRef.current?.abort();
+    abortRef.current = null;
+
     // Show loading immediately so the previous project's results are not visible
     // while the debounce is pending.
     setListState({ type: 'loading' });
@@ -96,13 +113,6 @@ export default function RecentTicketsPanel({ projectKey, refreshKey }: RecentTic
       debounceRef.current = null;
       doFetch(normalized);
     }, DEBOUNCE_MS);
-
-    return () => {
-      if (debounceRef.current !== null) {
-        clearTimeout(debounceRef.current);
-        debounceRef.current = null;
-      }
-    };
   }, [projectKey, doFetch]);
 
   // React to refresh signals (successful ticket creation) with no debounce.

@@ -119,8 +119,10 @@ Implemented:
   in the ticket-creation form is now shared with the recent-tickets panel: one
   controlled input drives both, so typing a project key in the creation form
   immediately updates the recent-tickets list. A `refreshKey` counter is
-  incremented on each successful ticket creation to trigger an immediate panel
-  refresh. Stable `useCallback` handlers prevent unnecessary child re-renders.
+  incremented on each successful ticket creation or Jira connection save to
+  trigger an immediate panel refresh. Shell callbacks are wrapped in
+  `useCallback` to keep their references stable across renders, avoiding
+  unnecessary re-runs of effects that list them as dependencies.
 - **A shared project-key utility** (`apps/web/src/utils/project-key.ts`) with
   `normalizeProjectKey`, `isValidProjectKey`, `PROJECT_KEY_PATTERN`, and
   `MAX_PROJECT_KEY_LENGTH`, shared between `TicketCreationPanel` and
@@ -139,33 +141,44 @@ Implemented:
     and the creation time in a `<time>` element with the ISO `dateTime` attribute.
   - **Error state**: a `role="alert"` region with safe, category-specific copy
     and a **Retry** button. Raw backend messages are never shown.
-- **Debounced project-key changes**: a 400 ms debounce gate prevents sending a
-  request on every keystroke. The panel enters the loading state immediately
-  when a valid key is provided, but the network request is delayed. When
-  `refreshKey` increments (after a successful ticket creation), the debounce is
-  bypassed and the fetch fires immediately, showing the new ticket without a 400 ms
-  wait.
-- **Stale-response prevention via `AbortController`**: every new fetch cancels
+- **Debounced project-key changes with immediate abort**: a 400 ms debounce
+  gate prevents sending a request on every keystroke. When the project key
+  changes to a valid value the panel enters the loading state immediately
+  **and aborts any active request for the previous project** — so a stale
+  response can never overwrite the loading state during the debounce window.
+  The network request for the new key is delayed by 400 ms. When `refreshKey`
+  increments (after a successful ticket creation or Jira connection save), the
+  debounce is bypassed and the fetch fires immediately.
+- **Stale-response prevention via `AbortController`**: every new fetch aborts
   the previous one. Aborted responses are silently ignored — no error is shown.
-  Changing the project key while a request is in flight shows the loading state
-  for the new key rather than displaying results from the old key.
+  The component also clears any pending debounce timer and aborts any active
+  request when it unmounts, preventing state updates after removal.
 - **Defensive response parsing** in `listRecentTickets`
   (`apps/web/src/api/tickets.ts`): each ticket item is validated for non-empty
   string fields, a valid ISO timestamp, and a safe Atlassian URL
   (`https://*.atlassian.net/browse/...`). A malformed success body becomes a
   `server` error. `AbortError` is propagated raw. Raw backend messages are
   always discarded.
+- **Jira connection save as a refresh trigger**: `JiraConnectionPanel` gains an
+  `onConnectionSaved` callback, called after a successful connection creation or
+  replacement. `AuthenticatedShell` responds by incrementing `refreshKey`,
+  which causes `RecentTicketsPanel` to abort any active request, enter loading
+  state, and immediately re-fetch against the new Jira connection. A failed
+  save never triggers a refresh.
 - **Frontend tests** (Vitest + React Testing Library) covering the
   `listRecentTickets` API function (41 tests: request shape, URL encoding,
   `AbortSignal` forwarding, success parsing, all malformed-body/item rejections,
   timestamp and URL validation, backend error-code mapping, fallback handling,
-  abort behavior, and `messageForReadError` completeness) and the
-  `RecentTicketsPanel` component (31 tests: prompt, loading, empty, success
+  abort behavior, and `messageForReadError` completeness), the
+  `RecentTicketsPanel` component (34 tests: prompt, loading, empty, success
   rendering, all error kinds with retry, key normalization, changing project key,
-  stale-response prevention, refresh on creation). The `TicketCreationPanel`
+  stale-response prevention including stale responses during the debounce
+  window, unmount cleanup, refresh on creation), and `JiraConnectionPanel`
+  (41 tests including `onConnectionSaved` behavior). The `TicketCreationPanel`
   tests are updated for the lifted `projectKey` prop via a stateful `Wrapper`.
-  The integration test suite in `App.test.tsx` gains five new tests covering the
-  panel's conditional display and the creation-triggers-refresh behavior.
+  The integration test suite in `App.test.tsx` gains seven new tests covering the
+  panel's conditional display, creation-triggers-refresh, and
+  connection-save-triggers-refresh behavior.
 
 Explicitly **not** implemented in Milestone 11: any backend changes; pagination,
 search, or filtering beyond a single `projectKey`; inline creation-to-list

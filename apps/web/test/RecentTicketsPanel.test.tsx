@@ -373,6 +373,56 @@ describe('stale response prevention', () => {
     expect(screen.getByText(TICKET_B.title)).toBeInTheDocument();
   });
 
+  it('ignores a stale response that arrives during the debounce window for the new project', async () => {
+    let resolveSCRUM!: (r: ListRecentTicketsResult) => void;
+    const scrumPromise = new Promise<ListRecentTicketsResult>((res) => { resolveSCRUM = res; });
+
+    mockedList
+      .mockReturnValueOnce(scrumPromise)
+      .mockResolvedValue(success([]));
+
+    const { rerender } = render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} />);
+    await act(async () => { vi.advanceTimersByTime(600); }); // SCRUM debounce fires, request in flight
+
+    // Switch to PROJ — the SCRUM request is aborted immediately and the component
+    // enters loading state for PROJ. The PROJ debounce has NOT fired yet.
+    rerender(<RecentTicketsPanel projectKey="PROJ" refreshKey={0} />);
+
+    expect(screen.getByText(/loading tickets/i)).toBeInTheDocument();
+
+    // Resolve the stale SCRUM promise while PROJ debounce is still pending.
+    await act(async () => { resolveSCRUM(success([TICKET_A])); });
+
+    // SCRUM result must be invisible; loading state for PROJ must still be shown.
+    expect(screen.queryByText(TICKET_A.title)).not.toBeInTheDocument();
+    expect(screen.getByText(/loading tickets/i)).toBeInTheDocument();
+
+    // Now fire the PROJ debounce and let its response resolve.
+    await act(async () => { vi.advanceTimersByTime(600); });
+
+    expect(screen.queryByText(TICKET_A.title)).not.toBeInTheDocument();
+    expect(screen.getByText(/no tickets/i)).toBeInTheDocument();
+  });
+
+  it('does not show an error when a request is aborted by a project change', async () => {
+    let resolveSCRUM!: (r: ListRecentTicketsResult) => void;
+    const scrumPromise = new Promise<ListRecentTicketsResult>((res) => { resolveSCRUM = res; });
+
+    mockedList
+      .mockReturnValueOnce(scrumPromise)
+      .mockResolvedValue(success([]));
+
+    const { rerender } = render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} />);
+    await act(async () => { vi.advanceTimersByTime(600); });
+
+    rerender(<RecentTicketsPanel projectKey="PROJ" refreshKey={0} />);
+
+    // Resolve the aborted SCRUM response — must produce no error.
+    await act(async () => { resolveSCRUM(success([TICKET_A])); });
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
   it('aborted requests do not show a network error', async () => {
     mockedList.mockReturnValue(new Promise(() => {})); // never resolves
 
@@ -384,6 +434,26 @@ describe('stale response prevention', () => {
 
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.getByText(/enter a jira project key/i)).toBeInTheDocument();
+  });
+
+  it('aborts the active request when the component unmounts', async () => {
+    let requestAborted = false;
+    mockedList.mockImplementation((_key, signal) => {
+      return new Promise<ListRecentTicketsResult>((_, reject) => {
+        signal?.addEventListener('abort', () => {
+          requestAborted = true;
+          reject(new DOMException('aborted', 'AbortError'));
+        });
+      });
+    });
+
+    const { unmount } = render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} />);
+    await act(async () => { vi.advanceTimersByTime(600); });
+
+    expect(screen.getByText(/loading tickets/i)).toBeInTheDocument();
+    unmount();
+
+    expect(requestAborted).toBe(true);
   });
 });
 

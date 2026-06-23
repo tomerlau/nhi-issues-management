@@ -1,8 +1,8 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../src/App';
 import { AuthError, login, logout, restoreSession, type SafeUser } from '../src/api/auth';
-import { getJiraConnection, JiraApiError } from '../src/api/jira';
+import { getJiraConnection, JiraApiError, saveJiraConnection } from '../src/api/jira';
 import { createTicket, listRecentTickets, TicketApiError, type CreatedTicket } from '../src/api/tickets';
 
 vi.mock('../src/api/auth', async () => {
@@ -42,6 +42,7 @@ const mockedRestore = vi.mocked(restoreSession);
 const mockedLogin = vi.mocked(login);
 const mockedLogout = vi.mocked(logout);
 const mockedGetJira = vi.mocked(getJiraConnection);
+const mockedSaveJira = vi.mocked(saveJiraConnection);
 const mockedCreateTicket = vi.mocked(createTicket);
 const mockedListRecentTickets = vi.mocked(listRecentTickets);
 
@@ -361,6 +362,84 @@ describe('ticket creation refreshes recent tickets', () => {
     expect(mockedListRecentTickets.mock.calls.length).toBe(callCountAfterFailure);
 
     vi.useRealTimers();
+  });
+});
+
+describe('connection save refreshes recent tickets', () => {
+  const connectedJira = {
+    connected: true as const,
+    siteUrl: 'https://acme.atlassian.net',
+    email: 'alice@example.com',
+  };
+
+  async function renderConnectedWithProject() {
+    mockedRestore.mockResolvedValue(alice);
+    mockedGetJira.mockResolvedValue(connectedJira);
+    mockedListRecentTickets.mockResolvedValue({ tickets: [] });
+    render(<App />);
+    await screen.findByLabelText(/project key/i);
+
+    typeInto(/project key/i, 'SCRUM');
+    await act(async () => { vi.advanceTimersByTime(600); });
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('calls listRecentTickets after a successful connection replacement', async () => {
+    await renderConnectedWithProject();
+    const callsBefore = mockedListRecentTickets.mock.calls.length;
+
+    mockedSaveJira.mockResolvedValue({
+      connected: true,
+      siteUrl: 'https://new.atlassian.net',
+      email: 'alice@example.com',
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /replace connection/i }));
+    fireEvent.change(screen.getByLabelText(/site url/i), {
+      target: { value: 'https://new.atlassian.net' },
+    });
+    fireEvent.change(screen.getByLabelText(/account email/i), {
+      target: { value: 'alice@example.com' },
+    });
+    fireEvent.change(screen.getByLabelText(/api token/i), {
+      target: { value: 'token123' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^replace connection$/i }));
+
+    await waitFor(() => {
+      expect(mockedListRecentTickets.mock.calls.length).toBeGreaterThan(callsBefore);
+    });
+  });
+
+  it('does not call listRecentTickets after a failed connection replacement', async () => {
+    await renderConnectedWithProject();
+
+    mockedSaveJira.mockRejectedValue(new JiraApiError('credentials_rejected', 'x'));
+
+    fireEvent.click(screen.getByRole('button', { name: /replace connection/i }));
+    fireEvent.change(screen.getByLabelText(/site url/i), {
+      target: { value: 'https://new.atlassian.net' },
+    });
+    fireEvent.change(screen.getByLabelText(/account email/i), {
+      target: { value: 'alice@example.com' },
+    });
+    fireEvent.change(screen.getByLabelText(/api token/i), {
+      target: { value: 'wrong-token' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^replace connection$/i }));
+
+    await screen.findByRole('alert');
+
+    const callsAfterFailure = mockedListRecentTickets.mock.calls.length;
+    await new Promise<void>((r) => setTimeout(r, 100));
+    expect(mockedListRecentTickets.mock.calls.length).toBe(callsAfterFailure);
   });
 });
 

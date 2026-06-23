@@ -298,6 +298,59 @@ describe('failed replacement keeps the existing connection', () => {
   });
 });
 
+describe('onConnectionSaved callback', () => {
+  it('calls onConnectionSaved after a successful connection creation', async () => {
+    mockedGet.mockResolvedValue({ connected: false });
+    const onSaved = vi.fn();
+    render(<JiraConnectionPanel onConnectionSaved={onSaved} />);
+    await screen.findByRole('button', { name: /^connect jira$/i });
+
+    mockedSave.mockResolvedValue(connected);
+    fillForm();
+    fireEvent.click(screen.getByRole('button', { name: /^connect jira$/i }));
+
+    await screen.findByRole('status');
+    expect(onSaved).toHaveBeenCalledTimes(1);
+  });
+
+  it('calls onConnectionSaved after a successful connection replacement', async () => {
+    mockedGet.mockResolvedValue(connected);
+    const onSaved = vi.fn();
+    render(<JiraConnectionPanel onConnectionSaved={onSaved} />);
+    await screen.findByText('https://acme.atlassian.net');
+
+    const replacement: JiraConnected = {
+      connected: true,
+      siteUrl: 'https://new.atlassian.net',
+      email: 'bob@example.com',
+    };
+    mockedSave.mockResolvedValue(replacement);
+
+    fireEvent.click(screen.getByRole('button', { name: /replace connection/i }));
+    fillField(/site url/i, 'https://new.atlassian.net');
+    fillField(/account email/i, 'bob@example.com');
+    fireEvent.change(tokenInput(), { target: { value: TOKEN } });
+    fireEvent.click(screen.getByRole('button', { name: /^replace connection$/i }));
+
+    await screen.findByRole('status');
+    expect(onSaved).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not call onConnectionSaved after a failed save', async () => {
+    mockedGet.mockResolvedValue({ connected: false });
+    const onSaved = vi.fn();
+    render(<JiraConnectionPanel onConnectionSaved={onSaved} />);
+    await screen.findByRole('button', { name: /^connect jira$/i });
+
+    mockedSave.mockRejectedValue(new JiraApiError('credentials_rejected', 'ignored'));
+    fillForm();
+    fireEvent.click(screen.getByRole('button', { name: /^connect jira$/i }));
+
+    await screen.findByRole('alert');
+    expect(onSaved).not.toHaveBeenCalled();
+  });
+});
+
 describe('tenant-sharing disclaimer placement', () => {
   function disclaimer() {
     return screen.getByText(/shared by everyone in your tenant/i);

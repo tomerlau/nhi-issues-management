@@ -29,6 +29,12 @@ interface JiraConnectionPanelProps {
    * issuing a second connection-status request.
    */
   onConnectionChange?: (connected: boolean) => void;
+  /**
+   * Called after a successful Jira connection creation or replacement. The shell
+   * uses this to invalidate and refresh the recent-ticket list against the new
+   * connection. It is never called after a failed save.
+   */
+  onConnectionSaved?: () => void;
 }
 
 /**
@@ -40,7 +46,7 @@ interface JiraConnectionPanelProps {
  * once captured (before the network request resolves), and it is never placed in
  * React state or any browser storage. siteUrl and email are ordinary state.
  */
-export default function JiraConnectionPanel({ onConnectionChange }: JiraConnectionPanelProps) {
+export default function JiraConnectionPanel({ onConnectionChange, onConnectionSaved }: JiraConnectionPanelProps) {
   const headingId = useId();
   const siteUrlId = useId();
   const siteUrlHintId = useId();
@@ -132,6 +138,7 @@ export default function JiraConnectionPanel({ onConnectionChange }: JiraConnecti
             ? 'Jira connection replaced. The shared connection for your tenant has been updated.'
             : 'Jira connection created. It is now shared by everyone in your tenant.',
         );
+        onConnectionSaved?.();
       })
       .catch((error: unknown) => {
         // A failed save never removes the existing connection: keep the loaded
