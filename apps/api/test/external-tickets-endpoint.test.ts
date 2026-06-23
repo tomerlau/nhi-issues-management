@@ -280,7 +280,7 @@ describe('external ticket endpoint POST /api/v1/tickets', () => {
     it('returns 400 for an oversized body without calling Jira', async () => {
       storeConnection('tenant-acme', 'user-acme-alice');
       const { fullKey } = apiKeyService.create('tenant-acme', 'user-acme-alice');
-      const fetch = happyPathFetch();
+      const fetch = vi.fn() as unknown as FetchLike;
       const app = appWith(db, { encryptionKey, fetch });
 
       const oversizedBody = { ...validBody, description: 'a'.repeat(11_000) };
@@ -292,6 +292,7 @@ describe('external ticket endpoint POST /api/v1/tickets', () => {
       expect(res.status).toBe(400);
       expect(res.body.error.code).toBe('invalid_request');
       expect(res.headers['cache-control']).toContain('no-store');
+      expect(fetch).not.toHaveBeenCalled();
       // Body content must not appear in the error response.
       const dump = JSON.stringify(res.body);
       expect(dump).not.toContain('aaaa');
@@ -346,7 +347,20 @@ describe('external ticket endpoint POST /api/v1/tickets', () => {
     it('normalizes lowercase projectKey to uppercase, matching the UI endpoint behavior', async () => {
       storeConnection('tenant-acme', 'user-acme-alice');
       const { fullKey } = apiKeyService.create('tenant-acme', 'user-acme-alice');
-      const app = appWith(db, { encryptionKey, fetch: happyPathFetch() });
+
+      const scrumProjectBody = {
+        id: '10002',
+        key: 'SCRUM',
+        issueTypes: [{ id: '2', name: 'Task', subtask: false }],
+      };
+      const fetch = vi.fn(async (_url: string, init?: RequestInit) => {
+        if ((init?.method ?? 'GET') === 'POST') {
+          return jsonResponse({ id: '20001', key: 'SCRUM-42' }, 201);
+        }
+        return jsonResponse(scrumProjectBody);
+      }) as unknown as FetchLike;
+
+      const app = appWith(db, { encryptionKey, fetch });
 
       const res = await request(app)
         .post('/api/v1/tickets')
@@ -354,11 +368,19 @@ describe('external ticket endpoint POST /api/v1/tickets', () => {
         .send({ ...validBody, projectKey: 'scrum' });
 
       expect(res.status).toBe(201);
+      expect(res.body).toEqual({ issueId: '20001', issueKey: 'SCRUM-42' });
+
+      // The project-validation URL must contain the normalized key SCRUM, not lowercase scrum.
+      const calledUrls = (fetch as ReturnType<typeof vi.fn>).mock.calls.map(
+        (args: unknown[]) => args[0] as string,
+      );
+      expect(calledUrls.some((url) => url.includes('SCRUM'))).toBe(true);
+      expect(calledUrls.every((url) => !url.includes('scrum'))).toBe(true);
 
       const row = db
         .prepare('SELECT jira_project_key FROM jira_ticket_provenance')
         .get() as { jira_project_key: string };
-      expect(row.jira_project_key).toBe('ABC');
+      expect(row.jira_project_key).toBe('SCRUM');
     });
   });
 
