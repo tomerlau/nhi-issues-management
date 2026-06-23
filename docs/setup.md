@@ -131,4 +131,6 @@ format.
   checklist (login, Jira, sharing, isolation, tickets, API keys).
 - [docs/api.md](api.md) — external REST API reference and curl examples.
 
-> Clean-clone validation has not been performed for this submission yet.
+> The documented clean-clone flow above (`npm ci`, `npm run setup`,
+> `npm run dev`) has been validated successfully. `npm run setup` was also
+> re-run to confirm idempotency, and `npm run check` passed.

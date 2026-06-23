@@ -79,6 +79,21 @@ apps/
 docs/       Product documentation (see below)
 ```
 
+## Scope limitations
+
+- **User lifecycle management is out of scope.** There is no user
+  registration, creation, invitation, deletion, or management through the UI
+  or REST API. Demo users are provisioned only by the seed/setup flow
+  (`npm run setup` / `npm run seed`).
+- **API-key lifecycle management is local-only.** There is no UI or REST API
+  for creating, listing, rotating, or revoking API keys. Keys are provisioned
+  and revoked only through the local CLI commands
+  (`npm run api-key:create` / `npm run api-key:revoke`).
+- **The optional NHI Blog Digest bonus is not implemented.**
+
+See [docs/assumptions.md](docs/assumptions.md) for the full list of POC
+assumptions and production alternatives.
+
 ## Documentation
 
 - [docs/setup.md](docs/setup.md) — install, environment, run, API-key CLI.
@@ -91,5 +106,3 @@ docs/       Product documentation (see below)
   production alternatives.
 - [docs/manual-validation.md](docs/manual-validation.md) — end-to-end manual
   validation checklist.
-
-The optional NHI Blog Digest bonus is **not implemented** in this POC.
