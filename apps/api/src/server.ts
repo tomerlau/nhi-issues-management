@@ -16,7 +16,7 @@ console.log(`[api] database ready at ${databasePath}`);
 // (its endpoints return 503) without preventing the rest of the app from running.
 const jiraEncryptionKey = resolveJiraEncryptionKey();
 console.log(
-  `[api] jira connection ${jiraEncryptionKey ? 'configured' : 'not configured (set JIRA_CREDENTIAL_ENCRYPTION_KEY to enable)'}`,
+  `[api] jira credential encryption ${jiraEncryptionKey ? 'configured' : 'not configured (set JIRA_CREDENTIAL_ENCRYPTION_KEY to enable Jira connections)'}`,
 );
 
 const app = createApp(db, {
