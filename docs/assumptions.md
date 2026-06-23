@@ -1,7 +1,7 @@
 # Project Assumptions
 
 This document records the assumptions and tradeoffs relevant to the
-functionality implemented through the current milestone (Milestone 10). It grows
+functionality implemented through the current milestone (Milestone 12). It grows
 cumulatively as later milestones add functionality.
 
 ## Scope
@@ -31,6 +31,9 @@ cumulatively as later milestones add functionality.
   tickets created through this application for the tenant's currently connected
   Jira site and a selected project, with membership and order from local
   provenance and every displayed value hydrated live from Jira.
+- Milestone 12 adds application-issued API-key authentication: an `api_keys`
+  table, key generation and verification, authentication middleware, and local
+  CLI provisioning and revocation commands.
 - The optional blog digest is not part of the current implementation.
 
 ## Frontend

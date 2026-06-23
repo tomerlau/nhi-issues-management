@@ -878,3 +878,113 @@ the percent-encoded current key — never a self/redirect/location URL.
 unauthenticated request returns 401 `unauthenticated`. The mapping mirrors the
 sanitized Jira outcomes already used by ticket creation; no variant carries the
 plaintext token, raw Jira content, or internal error detail.
+
+## API-key authentication (Milestone 12)
+
+Milestone 12 adds application-issued API-key authentication as a second
+authentication path alongside the existing session-cookie mechanism. It is backend
+only and adds no new REST endpoints visible to external callers.
+
+### Key format and generation
+
+Keys follow the format `nhi_<keyId>.<secret>`:
+
+- `keyId` — 16 cryptographically random bytes encoded as base64url (22 characters).
+  This is the public selector stored as the primary key in `api_keys.id`.
+- `secret` — 32 cryptographically random bytes encoded as base64url (43 characters,
+  ≥ 256 bits of entropy). Only the SHA-256 hash of the secret is persisted; the
+  plaintext is shown exactly once during local provisioning and cannot be recovered.
+- `.` is the separator. Because `.` is not in the base64url alphabet
+  (`A-Z a-z 0-9 - _`), the format is unambiguous regardless of the characters in
+  either base64url component.
+
+`api-key-token.ts` owns format generation, parsing, SHA-256 hashing, and
+timing-safe verification. It never constructs an Authorization header and never
+logs the secret or the full key.
+
+### api_keys table
+
+`008_api_keys.sql` creates a SQLite `STRICT` table with columns `id` (public
+selector, primary key), `tenant_id`, `user_id`, `secret_hash`, and `created_at`. A
+composite `FOREIGN KEY (tenant_id, user_id)` references `users(tenant_id, id)`,
+enforcing referential integrity and tenant safety. There is no `revoked_at` column
+and no soft-delete: revocation physically deletes the row, so a revoked key is
+permanently indistinguishable from an unknown key.
+
+### ApiKeyRepository
+
+`ApiKeyRepository` exposes three operations:
+
+- `create(record)` — inserts a new row with the public id, tenant/user metadata,
+  and secret hash.
+- `findById(keyId)` — looks up a row by the public key id. This lookup is
+  **deliberately unscoped by tenant**: the key ID is the trusted selector chosen
+  at generation time, and the ownership is then read from the stored row rather
+  than from any request input.
+- `deleteById(keyId)` — physically removes the row. Idempotent: a missing key id
+  causes no error. There is no tombstone, no `revoked_at`, and no audit history.
+
+### ApiKeyService
+
+`ApiKeyService` exposes three operations:
+
+- `create(tenantId, userId)` — generates the key and secret (both cryptographically
+  random), hashes the secret with SHA-256, persists only the hash and metadata, and
+  returns the `fullKey` exactly once. The plaintext secret is not retained after
+  this call.
+- `authenticate(rawKey)` → `AuthContext | null` — parses the raw key string into
+  `keyId` and `secret`, looks up the record by `keyId` via `findById`, performs a
+  timing-safe comparison of the SHA-256 hash of the presented secret against the
+  stored hash, and on success returns an `AuthContext` constructed from the stored
+  `tenantId` and `userId`. Returns `null` for every failure (malformed format,
+  unknown id, wrong secret, deleted key). The timing-safe comparison prevents
+  secret enumeration via response timing.
+- `revoke(keyId)` → `boolean` — delegates to `deleteById` and returns `true` when
+  the row existed and was deleted, `false` when it was already absent.
+
+### Middleware (createRequireApiKeyAuth)
+
+`createRequireApiKeyAuth` is an Express middleware factory. It reads the
+`Authorization: Bearer <api-key>` header from the incoming request and delegates
+verification to `ApiKeyService.authenticate`. On success it writes `req.auth` with
+the same `AuthenticatedState` shape used by session authentication, populating
+`req.auth.context` with the `AuthContext` from the stored key record. All failure
+paths — missing `Authorization` header, wrong scheme (not `Bearer`), malformed key
+format, unknown key ID, wrong secret, deleted key — return the same
+`401 Unauthenticated` response with `Cache-Control: no-store`. No failure path
+discloses whether the key existed, whether the ID was valid, or any detail about
+why the request was rejected.
+
+### Trust boundary
+
+Ownership derives exclusively from the stored key record. The middleware never
+reads `tenantId`, `userId`, or any ownership-related value from the request body,
+query string, path parameters, or additional headers. A key authenticates exactly
+as the tenant and user recorded at creation time, with no override path. This
+mirrors the session-auth trust model where `tenantId` and `userId` come solely
+from the stored session row.
+
+### AuthContext reuse
+
+The middleware populates `req.auth.context` with the same `AuthContext` shape used
+by `requireAuth` (session middleware). Downstream route handlers can use either
+middleware interchangeably for authorization checks. The `user` field in
+`AuthenticatedState` is now **optional**: session authentication populates it with
+the loaded `SafeUser`; API-key authentication does not load a user record and
+leaves `user` absent. The `AuthContext` type comment was updated to remove
+session-only language, since it now describes a shared context populated by both
+authentication paths.
+
+### Local provisioning CLI scripts
+
+Two CLI scripts provide local key management:
+
+- `api-key-create.ts` (`npm run api-key:create --workspace apps/api -- --email <email>`)
+  — resolves the user by globally unique email using
+  `UserRepository.findByEmailForAuthentication`, derives `tenantId` and `userId`
+  from the stored user record (never from CLI arguments), generates and persists the
+  key via `ApiKeyService.create`, and prints the full key once with a clear warning
+  that it cannot be retrieved again.
+- `api-key-revoke.ts` (`npm run api-key:revoke --workspace apps/api -- --key-id <id>`)
+  — calls `ApiKeyService.revoke(keyId)` and physically deletes the row. Idempotent:
+  an already-absent key ID exits cleanly with a confirmation message.
