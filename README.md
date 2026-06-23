@@ -6,6 +6,14 @@ This repository is built in milestones. The current milestone (Milestone 13)
 adds an external-facing REST endpoint that lets external systems create NHI
 finding Jira tickets using an application-issued API key. It builds on the M12
 API-key authentication infrastructure and the M8 ticket-creation domain service.
+Milestone 12 adds application-issued API-key authentication: an `api_keys`
+table, key generation and verification, an Express middleware, and local CLI
+scripts to provision and revoke keys. It builds on the existing session-based
+authentication and AuthContext infrastructure. Milestone 11 adds the frontend
+recent-tickets UI: the authenticated shell now displays the ten most recent
+tickets for a selected Jira project. It is frontend only and consumes the
+unchanged Milestone 10 `GET /api/tickets?projectKey=...` contract; no backend
+behavior changed.
 
 Milestone 10 added a backend-only recent-tickets read: an authenticated
 `GET /api/tickets?projectKey=...` endpoint that returns the ten most recent
@@ -274,7 +282,128 @@ Explicitly **not** implemented in Milestone 12: API-key management UI; REST
 endpoints for creating or revoking keys; the external ticket creation REST endpoint
 (deferred to M13); caller-selected tenant or user; key listing; `revoked_at` or
 soft-delete; expiration; rotation; `last_used_at`; roles or an administrator
-model; and any M11 changes.
+model.
+
+## Earlier milestone scope (Milestone 11: Recent tickets UI)
+
+Frontend only; it consumes the unchanged Milestone 10 backend contract
+(`GET /api/tickets?projectKey=...`). No backend changes were made. Milestone 11
+implements the full recent-tickets UX redesign: a page-level project selector,
+two distinct ticket-panel modes, Jira connection management in a modal, and a
+reusable ticket-creation form component.
+
+Implemented:
+
+- **A page-level `ProjectSelector` component**
+  (`apps/web/src/components/ProjectSelector.tsx`). The project key is now owned
+  by `AuthenticatedShell` and entered in a dedicated labeled input outside any
+  form or modal. It shows a validation error (via `role="alert"`) only for
+  non-empty, invalid keys. The shared project-key utility
+  (`apps/web/src/utils/project-key.ts`) provides `normalizeProjectKey`,
+  `isValidProjectKey`, `PROJECT_KEY_PATTERN`, and `MAX_PROJECT_KEY_LENGTH` to
+  both the selector and the recent-tickets panel.
+- **`JiraConnectionPanel` refactored to a compact status bar**
+  (`apps/web/src/components/JiraConnectionPanel.tsx`). The panel renders a
+  compact connection indicator in the application header. When disconnected it
+  shows a red dot and "Jira not connected" with no trigger button. When
+  connected it shows a green dot, "Jira connected", and a gear-icon-only button
+  (`aria-label="Manage Jira connection"`) that opens a "Manage Jira connection"
+  modal for replacing the existing connection. The modal closes on success,
+  stays open on failure, and blocks Escape while a save is in flight. The
+  API-token secret-handling rules (uncontrolled input, cleared immediately on
+  submit, never in React state) are preserved unchanged. Exports a
+  `JiraStatusUpdate` discriminated union (`loading | error | disconnected |
+  connected`) and reports it via a single `onStatusChange` callback; the old
+  `onConnectionChange` / `onLoadingChange` booleans are replaced by this richer
+  type so callers can distinguish a load error from an explicit disconnected
+  response.
+- **`JiraInlineConnectForm` (new)**
+  (`apps/web/src/components/JiraInlineConnectForm.tsx`). Rendered in the main
+  content area only when the panel has confirmed `{ connected: false }` — never
+  on a load error. Provides the initial connection form (Jira Cloud site URL,
+  Atlassian email, API token, tenant-sharing disclaimer). On successful POST it
+  resets `submitting` and calls `onSuccess(connection)`, which transitions the
+  shell to connected immediately using the POST result.
+- **Two distinct content modes for `RecentTicketsPanel`**
+  (`apps/web/src/components/RecentTicketsPanel.tsx`):
+  - **Mode A** (success, tickets exist): renders a `<section>` with a "Recent
+    tickets" heading, an `<ol>` of ticket items (each with key, title link, and
+    creation time), and a "Create ticket" button that opens the creation modal
+    via `onOpenCreationModal`. No inline creation form.
+  - **Mode B** (success, zero tickets): renders an inline "Create your first
+    Jira ticket!" panel with an intro paragraph and a `TicketCreationForm`.
+    No "Recent tickets" heading, ticket list, or empty-state text.
+  - **Prompt / loading / error states** are unchanged from the previous
+    implementation. `prompt` returns `null` (the shell shows only the
+    `ProjectSelector` with its tooltip icon — no standalone prompt paragraph).
+- **A reusable `TicketCreationForm` component**
+  (`apps/web/src/components/TicketCreationForm.tsx`). Accepts `projectKey`
+  (for the API call and a read-only "Creating in project …" context display),
+  an optional `onSuccess` callback, and an optional `onSubmittingChange` callback
+  called with `true` immediately before a network request begins and `false` after
+  every resolved or rejected request. Exposes only `title` and `description`
+  fields — no project-key input. Handles the full create-ticket submit lifecycle
+  (validation, API call, success/error feedback, uncertain-outcome warning). Used
+  in both Mode B (inline) and inside the creation modal.
+- **An accessible `TicketCreationModal`**
+  (`apps/web/src/components/TicketCreationModal.tsx`). Opens via
+  `onOpenCreationModal` from Mode A. Implements `div[role="dialog"
+  aria-modal="true"]` with `aria-labelledby`, a "Create ticket" heading, and a
+  close (✕) button. Escape and the close button are disabled while the form is
+  submitting; submission state is received through `TicketCreationForm`'s
+  `onSubmittingChange` callback into a `useState`-held boolean. The modal also
+  accepts an optional `onSubmittingChange` prop and propagates submission state
+  upward to the shell so it can lock the project selector. On success, closes
+  the modal and calls `onTicketCreated` to trigger a refresh. Focus returns to the
+  "Create ticket" trigger button after the modal closes.
+- **`AuthenticatedShell` updated** to own `projectKey`, `refreshKey`,
+  `creationModalOpen`, `ticketCreationSubmitting`, `jiraRefreshSignal`, and a
+  `JiraShellState` union (`loading | error | disconnected | connected`).
+  `JiraConnectionPanel`'s `onStatusChange` drives transitions; a successful
+  inline POST immediately sets the shell to `connected` using the POST result,
+  and if the follow-up GET fails, the shell stays `connected` (loading and error
+  updates cannot demote a confirmed connection). `JiraInlineConnectForm` is only
+  shown in the `disconnected` state. The header shows: product name, Jira status
+  bar, user email, and sign-out — the user display name is not rendered. When
+  connected: `ProjectSelector` (with tooltip icon) → `RecentTicketsPanel` (when
+  valid key) → `TicketCreationModal`. `ProjectSelector` is disabled while
+  `creationModalOpen || ticketCreationSubmitting`.
+- **Debounced project-key changes, immediate abort, stale-response prevention,
+  and refresh-key triggers** — all unchanged from the prior milestone:
+  400 ms debounce, immediate abort of in-flight requests on key change,
+  `AbortController`-based stale-response prevention, unmount cleanup, and
+  `refreshKey` increment for immediate re-fetch after a successful creation or
+  Jira connection save.
+- **Defensive response parsing** in `listRecentTickets`
+  (`apps/web/src/api/tickets.ts`): unchanged — each ticket item validated for
+  non-empty string fields, a valid ISO timestamp, and a safe Atlassian URL.
+  `AbortError` is propagated raw. Raw backend messages are always discarded.
+- **Frontend tests** (Vitest + React Testing Library): `ProjectSelector`
+  (22 tests: label, absent helper text, value, outside-form guard, onChange,
+  validation error rules including lowercase normalisation copy, disabled state,
+  info icon presence and accessible name, keyboard focusability, tooltip
+  show/hide on hover and focus, tooltip text, tooltip dismiss on leave/blur),
+  `RecentTicketsPanel` (42 tests: prompt/loading/error states, Mode A and Mode B
+  rendering, onOpenCreationModal and onTicketCreated callbacks, Mode B → Mode A
+  transition, stale-response prevention), `JiraConnectionPanel` (48 tests:
+  compact-bar states, modal open/close, Escape blocking, form fields inside modal,
+  successful/failed saves, validation, duplicate-submit prevention, error-category
+  mapping, token secret handling, autofill mitigation, onConnectionSaved callback,
+  onStatusChange callback — loading/disconnected/connected/error), `TicketCreationForm`
+  (29 tests: form fields, no project-key input, project context display, validation,
+  API call, error mapping, uncertain outcomes, onSubmittingChange callback), and
+  `App.test.tsx` integration suite (78 tests including header content — DOM
+  order of Jira status before user controls, gear button class — disconnected
+  Jira inline form, Jira status resilience (GET error vs. disconnected, Retry
+  behaviors, POST-first immediate transition, POST+GET-failure resilience), compact
+  Jira bar, Mode A and Mode B, Mode B-to-Mode A transition, Mode A modal behaviour —
+  success, failure, uncertain outcome, pending blocking, focus restoration — project
+  selector locking for Mode A and Mode B, and creation flow).
+
+Explicitly **not** implemented in Milestone 11: any backend changes; pagination,
+search, or filtering beyond a single `projectKey`; inline creation-to-list
+animation or optimistic updates; polling or background auto-refresh; ticket
+editing, deletion, or transitions; configurable debounce or refresh intervals.
 
 ## Earlier milestone scope (Milestone 10: Recent tickets backend)
 

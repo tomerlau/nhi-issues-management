@@ -35,6 +35,10 @@ input {
   outline-offset: 2px;
 }
 
+/* --------------------------------------------------------------------------
+   Auth / login
+   -------------------------------------------------------------------------- */
+
 .auth-card {
   max-width: 24rem;
   margin: 4rem auto;
@@ -54,6 +58,10 @@ input {
   flex-direction: column;
   gap: 1rem;
 }
+
+/* --------------------------------------------------------------------------
+   Form primitives
+   -------------------------------------------------------------------------- */
 
 .field {
   display: flex;
@@ -81,6 +89,34 @@ input {
   color: var(--color-muted);
 }
 
+.field-hint {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--color-muted);
+}
+
+.form-error {
+  margin: 0;
+  color: var(--color-error);
+  font-size: 0.9rem;
+}
+
+.form-warning {
+  margin: 0;
+  color: var(--color-warning);
+  font-size: 0.9rem;
+}
+
+.form-success {
+  margin: 0;
+  color: var(--color-success);
+  font-size: 0.9rem;
+}
+
+/* --------------------------------------------------------------------------
+   Buttons
+   -------------------------------------------------------------------------- */
+
 button {
   padding: 0.55rem 1rem;
   border: 1px solid transparent;
@@ -96,11 +132,15 @@ button:disabled {
   cursor: progress;
 }
 
-.form-error {
-  margin: 0;
-  color: var(--color-error);
-  font-size: 0.9rem;
+button.secondary {
+  background: var(--color-surface);
+  color: var(--color-text);
+  border-color: var(--color-border);
 }
+
+/* --------------------------------------------------------------------------
+   App shell
+   -------------------------------------------------------------------------- */
 
 .app-shell {
   min-height: 100vh;
@@ -111,21 +151,23 @@ button:disabled {
 .app-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 1rem 1.5rem;
+  gap: 1.25rem;
+  padding: 0.75rem 1.5rem;
   background: var(--color-surface);
   border-bottom: 1px solid var(--color-border);
+  flex-wrap: wrap;
 }
 
 .app-name {
   font-weight: 700;
+  font-size: 1rem;
 }
 
 .app-user {
   display: flex;
   align-items: center;
   gap: 0.75rem;
+  margin-left: auto;
 }
 
 .app-user .user-name {
@@ -138,12 +180,177 @@ button:disabled {
 }
 
 .app-main {
-  max-width: 40rem;
+  max-width: 56rem;
+  width: 100%;
   margin: 2rem auto;
   padding: 0 1.5rem;
 }
 
-.jira-panel {
+/* --------------------------------------------------------------------------
+   Jira connection bar (compact, in the header)
+   -------------------------------------------------------------------------- */
+
+.jira-connection-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.jira-status-compact {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  flex-wrap: wrap;
+}
+
+.jira-status-error {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.35rem;
+}
+
+.jira-indicator-connected,
+.jira-indicator-disconnected {
+  width: 0.5rem;
+  height: 0.5rem;
+  flex: 0 0 auto;
+  border-radius: 50%;
+}
+
+.jira-indicator-connected {
+  background: var(--color-success);
+}
+
+.jira-indicator-disconnected {
+  background: var(--color-error);
+}
+
+.jira-label-connected {
+  color: var(--color-success);
+  font-weight: 600;
+}
+
+.jira-label-disconnected {
+  color: var(--color-error);
+}
+
+.jira-gear-button {
+  background: transparent;
+  border: none;
+  color: var(--color-muted);
+  padding: 0.2rem 0.4rem;
+  font-size: 0.9rem;
+  line-height: 1;
+  border-radius: 0.35rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 400;
+}
+
+.jira-gear-button:hover,
+.jira-gear-button:active {
+  color: var(--color-text);
+  background: var(--color-bg);
+}
+
+/* --------------------------------------------------------------------------
+   Jira inline connect form (in main content, when disconnected)
+   -------------------------------------------------------------------------- */
+
+.jira-inline-connect {
+  margin-top: 2rem;
+  padding: 1.5rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  max-width: 36rem;
+}
+
+.jira-inline-connect h2 {
+  margin-top: 0;
+  font-size: 1.1rem;
+}
+
+.jira-inline-connect .field + .field {
+  margin-top: 1rem;
+}
+
+.jira-inline-connect form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+/* --------------------------------------------------------------------------
+   Project selector
+   -------------------------------------------------------------------------- */
+
+.project-selector {
+  margin-top: 1.5rem;
+  max-width: 24rem;
+}
+
+/* --------------------------------------------------------------------------
+   Project selector — label row with info icon and tooltip
+   -------------------------------------------------------------------------- */
+
+.field-label-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.tooltip-anchor {
+  position: relative;
+  display: inline-flex;
+}
+
+.info-icon {
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: var(--color-muted);
+  font-size: 0;
+  line-height: 1;
+  font-weight: 400;
+  cursor: default;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+}
+
+.info-icon:hover,
+.info-icon:focus-visible {
+  color: var(--color-text);
+}
+
+.tooltip-text {
+  position: absolute;
+  left: 50%;
+  top: calc(100% + 0.4rem);
+  transform: translateX(-50%);
+  background: var(--color-text);
+  color: var(--color-surface);
+  font-size: 0.8rem;
+  font-weight: 400;
+  padding: 0.35rem 0.6rem;
+  border-radius: 0.3rem;
+  white-space: nowrap;
+  z-index: 10;
+  pointer-events: none;
+  max-width: min(22rem, calc(100vw - 2rem));
+  white-space: normal;
+}
+
+/* --------------------------------------------------------------------------
+   Recent tickets panel — shared container
+   -------------------------------------------------------------------------- */
+
+.recent-tickets-panel {
   margin-top: 2rem;
   padding: 1.5rem;
   background: var(--color-surface);
@@ -151,45 +358,160 @@ button:disabled {
   border-radius: 0.5rem;
 }
 
-.jira-panel h2 {
+.recent-tickets-panel h2 {
   margin-top: 0;
   font-size: 1.1rem;
 }
 
-.jira-shared-note {
-  margin-top: 1.5rem;
-  padding-top: 1rem;
-  border-top: 1px solid var(--color-border);
+.recent-tickets-loading,
+.recent-tickets-prompt {
+  margin: 0;
   color: var(--color-muted);
-  font-size: 0.85rem;
+  font-size: 0.9rem;
 }
 
-.jira-status {
-  margin: 1rem 0;
-}
+/* --------------------------------------------------------------------------
+   Mode A — tickets exist
+   -------------------------------------------------------------------------- */
 
-.jira-connection-state {
+.recent-tickets-header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.recent-tickets-header h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.recent-tickets-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
   gap: 0.5rem;
-  flex-wrap: wrap;
 }
 
-.jira-status-indicator {
-  width: 0.625rem;
-  height: 0.625rem;
-  flex: 0 0 auto;
-  border-radius: 50%;
-  background: var(--color-success);
+.recent-ticket-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: auto auto;
+  gap: 0.1rem 1rem;
+  padding: 0.65rem 0.75rem;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 0.35rem;
 }
 
-.jira-status-label {
-  color: var(--color-success);
-  font-weight: 700;
+.ticket-link {
+  grid-column: 1;
+  grid-row: 1;
+  color: var(--color-accent);
+  text-decoration: none;
+  font-weight: 600;
+  word-break: break-word;
 }
+
+.ticket-link:hover {
+  text-decoration: underline;
+}
+
+.ticket-key {
+  grid-column: 2;
+  grid-row: 1;
+  font-size: 0.8rem;
+  color: var(--color-muted);
+  font-family: monospace;
+  white-space: nowrap;
+}
+
+.ticket-time {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  font-size: 0.8rem;
+  color: var(--color-muted);
+}
+
+.recent-tickets-error {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.recent-tickets-error p {
+  margin: 0;
+  color: var(--color-error);
+  font-size: 0.9rem;
+}
+
+.recent-tickets-error button {
+  align-self: flex-start;
+}
+
+/* --------------------------------------------------------------------------
+   Mode B — first ticket inline panel
+   -------------------------------------------------------------------------- */
+
+.first-ticket-panel h2 {
+  margin-top: 0;
+  font-size: 1.1rem;
+}
+
+.first-ticket-intro {
+  margin-top: 0;
+  margin-bottom: 1rem;
+  color: var(--color-muted);
+  font-size: 0.9rem;
+}
+
+/* --------------------------------------------------------------------------
+   Ticket creation form (shared between inline and modal)
+   -------------------------------------------------------------------------- */
+
+.ticket-project-context {
+  margin: 0 0 1rem;
+  font-size: 0.9rem;
+  color: var(--color-muted);
+}
+
+.ticket-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.ticket-form textarea {
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.35rem;
+  resize: vertical;
+  font: inherit;
+}
+
+.ticket-form textarea[aria-invalid='true'] {
+  border-color: var(--color-error);
+}
+
+.ticket-form textarea:disabled {
+  background: var(--color-bg);
+  color: var(--color-muted);
+}
+
+.ticket-form-actions {
+  display: flex;
+  gap: 0.75rem;
+}
+
+/* --------------------------------------------------------------------------
+   Jira connection form (inside modal)
+   -------------------------------------------------------------------------- */
 
 .jira-details {
-  margin: 0.5rem 0 1rem;
+  margin: 0 0 1rem;
   display: grid;
   gap: 0.5rem;
 }
@@ -229,74 +551,113 @@ button:disabled {
   gap: 0.75rem;
 }
 
-.field-hint {
-  margin: 0;
-  font-size: 0.8rem;
+.jira-shared-note {
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--color-border);
   color: var(--color-muted);
+  font-size: 0.85rem;
 }
 
-.form-success {
-  margin: 0;
-  color: var(--color-accent);
-  font-size: 0.9rem;
+/* --------------------------------------------------------------------------
+   Modal
+   -------------------------------------------------------------------------- */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 1rem;
 }
 
-button.secondary {
-  background: var(--color-surface);
-  color: var(--color-text);
-  border-color: var(--color-border);
-}
-
-.ticket-panel {
-  margin-top: 2rem;
-  padding: 1.5rem;
+.modal {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: 0.5rem;
+  width: 100%;
+  max-width: 36rem;
+  max-height: calc(100vh - 2rem);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
-.ticket-panel h2 {
-  margin-top: 0;
+.modal:focus {
+  outline: none;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+.modal-title {
+  margin: 0;
   font-size: 1.1rem;
 }
 
-.ticket-intro {
-  margin-top: 0;
+.modal-close {
+  background: transparent;
   color: var(--color-muted);
-  font-size: 0.9rem;
+  border: none;
+  padding: 0.25rem 0.5rem;
+  font-size: 1rem;
+  cursor: pointer;
+  font-weight: 400;
 }
 
-.ticket-form {
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-  margin-top: 1rem;
+.modal-close:hover {
+  color: var(--color-text);
 }
 
-.ticket-form textarea {
-  padding: 0.5rem 0.6rem;
-  border: 1px solid var(--color-border);
-  border-radius: 0.35rem;
-  resize: vertical;
-  font: inherit;
+.modal-body {
+  padding: 1.25rem;
+  overflow-y: auto;
 }
 
-.ticket-form textarea[aria-invalid='true'] {
-  border-color: var(--color-error);
-}
+/* --------------------------------------------------------------------------
+   Mobile
+   -------------------------------------------------------------------------- */
 
-.ticket-form textarea:disabled {
-  background: var(--color-bg);
-  color: var(--color-muted);
-}
+@media (max-width: 600px) {
+  .app-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.75rem;
+  }
 
-.ticket-form-actions {
-  display: flex;
-  gap: 0.75rem;
-}
+  .app-user {
+    margin-left: 0;
+  }
 
-.form-warning {
-  margin: 0;
-  color: var(--color-warning);
-  font-size: 0.9rem;
+  .app-main {
+    margin: 1rem auto;
+    padding: 0 1rem;
+  }
+
+  .recent-tickets-header {
+    flex-wrap: wrap;
+  }
+
+  .recent-ticket-item {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto auto;
+  }
+
+  .ticket-key {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .ticket-time {
+    grid-row: 3;
+  }
 }

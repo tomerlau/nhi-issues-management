@@ -147,21 +147,48 @@ and the module logs nothing.
 
 ### Jira connection panel
 
-`src/components/JiraConnectionPanel.tsx` is mounted inside the authenticated
-shell. It owns a small load state (`loading` → `ready` / `error`) plus the safe
-connection status, and renders the disconnected form, the connected summary
-(safe site URL and email only), the shared-tenant explanation, the create/replace
-flow, and a load-error state. The load-error state retains the safe
-`JiraErrorKind` from a rejected `getJiraConnection` (falling back to `server` for
-an unknown error, and ignoring `AbortError`), so it shows category-specific copy
-— configuration, availability, timeout, network, or generic — instead of one
-collapsed message, and offers a **Try again** retry where retrying is meaningful.
-An authentication failure is the exception: it explains the session is no longer
-valid and asks the user to refresh or sign in again rather than offering a futile
-retry. It derives the displayed status solely from the backend response; it never
-renders raw backend messages, technical error codes, internal
-user/tenant/connection IDs, account IDs, audit metadata, encrypted data, or
-credential material.
+`src/components/JiraConnectionPanel.tsx` is mounted in the application header
+inside the authenticated shell. As of Milestone 11 it was refactored from a
+full-page form into a compact status bar. The bar renders the current connection
+state: when disconnected it shows a red dot and "Jira not connected" with no
+trigger button; when connected it shows a green dot, "Jira connected", and a
+gear-icon-only button (`aria-label="Manage Jira connection"`) that opens a
+"Manage Jira connection" modal. Connection details (site URL, email), the
+tenant-sharing disclaimer, and the replace form live exclusively inside that
+accessible modal (`div[role="dialog" aria-modal="true"]`) that opens on demand
+and closes on a successful save. A failed save keeps the modal open; Escape is
+blocked while a save is in flight. The panel exports a `JiraStatusUpdate`
+discriminated union (`loading | error | disconnected | connected`) and fires it
+via a single `onStatusChange` callback whenever its internal `LoadState` changes.
+This replaces the old boolean `onConnectionChange` / `onLoadingChange` pair and
+allows the shell to distinguish a load error from an explicit disconnected
+response. The `externalRefreshSignal` prop (an integer incremented by the shell)
+still triggers an immediate re-fetch of the connection status.
+
+Regardless of modal or bar, the component owns a small load state (`loading` →
+`ready` / `error`) plus the safe connection status. The load-error state retains
+the safe `JiraErrorKind` (falling back to `server` for an unknown error, ignoring
+`AbortError`), shows category-specific copy, and offers a **Try again** retry
+where retrying is meaningful. An authentication failure asks the user to refresh
+or sign in rather than offering a futile retry. It derives the displayed status
+solely from the backend response; it never renders raw backend messages, technical
+error codes, internal user/tenant/connection IDs, account IDs, audit metadata,
+encrypted data, or credential material.
+
+### Initial Jira connection inline form
+
+`src/components/JiraInlineConnectForm.tsx` is a new component rendered in the
+main content area only when the panel has confirmed `{ connected: false }` from
+a GET response (shell state `disconnected`). A load error never shows the form;
+the panel displays a safe error with Retry instead. The form provides the initial
+connection (Jira Cloud site URL, Atlassian account email, API token, tenant-sharing
+disclaimer). On a successful POST it resets its `submitting` state and calls
+`onSuccess(connection)`. `AuthenticatedShell` handles `onSuccess` by immediately
+setting `jiraState = { status: 'connected', connection }` from the POST result —
+before any follow-up GET — and incrementing `jiraRefreshSignal` to trigger
+reconciliation. The same API-token secret-handling rules apply: the token input
+is uncontrolled, cleared immediately on submit before the request begins, and
+never placed in React state.
 
 ### Why the API token is never held in client state
 
@@ -793,10 +820,19 @@ request, `JiraConnectionPanel` reports its loaded connection state upward throug
 small `onConnectionChange` callback (it reports `false` while loading, on a
 status-load error, and when disconnected, and `true` once a connected status is
 loaded or a save succeeds). `AuthenticatedShell` holds that boolean and renders
-`TicketCreationPanel` only when it is `true`. This is a deliberately narrow local
-composition: connection management and ticket creation stay as separate
-components, and no global state, routing, or broad context abstraction is
-introduced.
+both the ticket-creation and recent-tickets panels only when it is `true`.
+
+`JiraConnectionPanel` also exposes an `onConnectionSaved` callback, called after
+a successful connection creation or replacement (never after a failure). The shell
+increments `refreshKey` in response, which causes `RecentTicketsPanel` to abort
+any active request, enter loading state, and immediately re-fetch against the new
+Jira connection. This ensures old-site ticket links disappear when the tenant
+switches Jira sites, without issuing another connection-status request or exposing
+any credential or raw connection data to the ticket panel.
+
+This is a deliberately narrow local composition: connection management, ticket
+creation, and the recent-ticket list stay as separate components, and no global
+state, routing, or broad context abstraction is introduced.
 
 ## Recent tickets backend (Milestone 10)
 
@@ -878,6 +914,209 @@ the percent-encoded current key — never a self/redirect/location URL.
 unauthenticated request returns 401 `unauthenticated`. The mapping mirrors the
 sanitized Jira outcomes already used by ticket creation; no variant carries the
 plaintext token, raw Jira content, or internal error detail.
+
+## Frontend recent-tickets UI (Milestone 11)
+
+Milestone 11 delivers the full recent-tickets UX redesign. It is **frontend
+only** and consumes the unchanged Milestone 10 `GET /api/tickets?projectKey=...`
+contract; no backend behavior changed. The flow follows the same client boundary
+as the rest of the frontend: it holds no secrets, talks to the backend only over
+a relative `/api` request with the same-origin session cookie, and derives
+displayed values solely from the validated API response.
+
+### Page-level project selector
+
+`src/components/ProjectSelector.tsx` is a new standalone component rendered in
+the main content area when the tenant is Jira-connected. It shows a "Jira
+project" label with an inline information icon, and a single text input. The
+information icon shows a tooltip ("Enter a Jira project key to view or create
+tickets.") on hover and keyboard focus; it has `aria-label="About the project
+key"` and `role="tooltip"` on the tooltip span. No persistent helper sentence is
+rendered. A validation error (`role="alert"`) appears only for non-empty, invalid
+keys — an empty value is always silent. The component is not inside any form
+element; it is wired directly into `AuthenticatedShell` via an `onChange` prop.
+
+### Shared project-key state and shell layout
+
+`AuthenticatedShell` owns six pieces of state: the raw `projectKey` string, an
+integer `refreshKey`, a boolean `creationModalOpen`, a boolean
+`ticketCreationSubmitting`, a `JiraShellState` union `jiraState` (starts
+`{ status: 'loading' }`), and an integer `jiraRefreshSignal`. The header shows:
+product name, Jira status bar, user email, and sign-out — the user display name
+is not rendered.
+
+`JiraShellState` is a discriminated union with four members:
+
+```ts
+type JiraShellState =
+  | { status: 'loading' }
+  | { status: 'error' }
+  | { status: 'disconnected' }
+  | { status: 'connected'; connection: JiraConnectionStatus };
+```
+
+`JiraConnectionPanel` fires its `onStatusChange` callback with a matching
+`JiraStatusUpdate` union whenever the panel's load state changes. The shell's
+`handleJiraStatusChange` applies one guard before accepting the update: if the
+current state is `connected`, incoming `loading` or `error` updates are ignored
+so that a transient follow-up GET failure cannot demote a confirmed connection.
+A `disconnected` update from the panel is always authoritative and accepted even
+from `connected`.
+
+`JiraInlineConnectForm` is rendered **only** when `jiraState.status ===
+'disconnected'` — never during `loading` or `error`. When its POST succeeds,
+`handleInlineConnectSuccess` immediately calls `setJiraState({ status:
+'connected', connection })` using the POST response body, then increments
+`jiraRefreshSignal` to trigger a follow-up GET. The inline form is therefore
+removed from the DOM as soon as the POST resolves, regardless of whether the
+follow-up GET succeeds.
+
+When `jiraState.status === 'connected'` the shell renders:
+
+1. `JiraConnectionPanel` in the header.
+2. `ProjectSelector` in the main area, **disabled** while
+   `creationModalOpen || ticketCreationSubmitting`. This prevents the project
+   from changing while a non-idempotent ticket-creation request is in flight or
+   the modal is open. When no valid project key is entered, only the selector
+   and its inline tooltip icon are shown — no standalone prompt paragraph.
+3. `RecentTicketsPanel`, rendered only when the normalized key is valid.
+4. `TicketCreationModal` (rendered outside the flow, always present while
+   Jira-connected, shown/hidden via the `open` prop).
+
+Both `RecentTicketsPanel` and `TicketCreationModal` receive an
+`onSubmittingChange` callback so either form (Mode B inline or the modal form)
+can report submission state upward to `AuthenticatedShell`, which toggles
+`ticketCreationSubmitting` in response.
+
+`handleJiraStatusChange` is wrapped in `useCallback` because `JiraConnectionPanel`
+lists `onStatusChange` in its effect dependency array — an unstable reference
+would cause that effect to re-run on every shell render. The other shell callbacks
+(`handleTicketCreated`, `handleConnectionSaved`, `handleOpenCreationModal`,
+`handleCloseCreationModal`, `handleTicketCreationSubmittingChange`) use
+`useCallback` as convention.
+
+`handleConnectionSaved` increments `refreshKey` after `JiraConnectionPanel`
+reports a successful connection creation or replacement, triggering an immediate
+re-fetch against the new Jira site. A failed save never calls the callback.
+
+### Shared project-key utility
+
+`src/utils/project-key.ts` exports `normalizeProjectKey`, `isValidProjectKey`,
+`PROJECT_KEY_PATTERN`, and `MAX_PROJECT_KEY_LENGTH`. `ProjectSelector` and
+`RecentTicketsPanel` both import from this module. The pattern is the same
+conservative Jira project-key syntax the backend enforces: `^[A-Z][A-Z0-9]+$`,
+at least two characters, at most ten.
+
+### Read API module extension
+
+`src/api/tickets.ts` gains a second export group for the read side:
+`RecentTicket`, `ListRecentTicketsResult`, `RecentTicketsErrorKind`,
+`RecentTicketsApiError`, `messageForReadError`, and `listRecentTickets`. The
+function sends `GET /api/tickets?projectKey=<encoded>` with
+`credentials: 'same-origin'` and an optional `AbortSignal`. It propagates
+`AbortError` (a `DOMException` with `name === 'AbortError'`) raw without wrapping
+it in a `RecentTicketsApiError`, so the caller can check `signal.aborted` rather
+than catch-filtering. Every other failure — including a network `TypeError` — is
+mapped to a typed `RecentTicketsApiError`. The backend `message` field is always
+discarded; `messageForReadError` provides safe, generic copy for each kind.
+
+Success body validation is stricter than the creation side, because the response
+is rendered directly:
+
+- The top-level body must be an object with an `Array` `tickets` field.
+- Each ticket must have non-empty string `issueId`, `issueKey`, `title`, and
+  `url`, and a non-empty string `createdAt` whose `Date` parse is not `NaN`.
+- Each `url` must parse as a valid URL with the `https:` protocol, a hostname
+  matching `/^[^.]+\.atlassian\.net$/`, and a path starting with `/browse/`.
+  HTTP URLs, non-Atlassian hosts, bare `atlassian.net`, and paths outside
+  `/browse/` are all rejected.
+
+A single invalid ticket item rejects the whole response as a `server` error
+rather than silently dropping the item, so the caller always receives a
+consistent, fully-validated list.
+
+### TicketCreationForm component
+
+`src/components/TicketCreationForm.tsx` is a new reusable form component that
+accepts `projectKey: string`, an optional `onSuccess: (issueKey: string) => void`,
+and an optional `onSubmittingChange: (submitting: boolean) => void`. It exposes
+only `title` and `description` inputs — no project-key input — and shows a
+read-only "Creating in project `<key>`" context line. It owns the full
+ticket-creation submit lifecycle: client-side validation, the `createTicket` API
+call, success feedback (announced via `role="status"`) and field-clearing, and
+error feedback (via `role="alert"` with a distinct uncertain-outcome warning for
+non-idempotent failures). Duplicate submissions are prevented and controls are
+disabled while a request is in flight. `onSubmittingChange` is called with `true`
+immediately before a network request begins and with `false` after every resolved
+or rejected request, so a parent modal can disable its close controls reactively
+without inspecting the DOM.
+
+### TicketCreationModal component
+
+`src/components/TicketCreationModal.tsx` wraps `TicketCreationForm` in an
+accessible modal. It renders `div[role="dialog" aria-modal="true"
+aria-labelledby=…]` (rather than a native `<dialog>`) with a "Create ticket" h2
+heading and a close (✕) button, and handles the Escape key. Escape and the close
+button are disabled while the form is submitting; submission state is received
+through `TicketCreationForm`'s `onSubmittingChange` callback into a
+`useState`-held boolean — not inferred by inspecting the DOM. The modal also
+accepts an optional `onSubmittingChange?: (submitting: boolean) => void` prop; a
+`handleSubmittingChange` combiner updates both the local boolean (controlling
+close/Escape) and propagates to the shell (controlling `ProjectSelector`
+locking). On a successful creation it calls `onClose()` first, then
+`onTicketCreated()` to trigger a `refreshKey` increment in the shell. On failure
+the modal stays open. The `triggerRef` prop is used to return focus to the
+"Create ticket" button after the modal closes.
+
+### RecentTicketsPanel component — Mode A and Mode B
+
+`src/components/RecentTicketsPanel.tsx` accepts `projectKey: string`,
+`refreshKey: number`, `onOpenCreationModal?: () => void`,
+`onTicketCreated?: () => void`, `triggerRef?: RefObject<HTMLButtonElement>`, and
+`onSubmittingChange?: (submitting: boolean) => void`. Its internal state is a single
+discriminated union:
+
+```
+{ type: 'prompt' } | { type: 'loading' } | { type: 'success'; tickets } | { type: 'error'; kind }
+```
+
+The `prompt` state returns `null` — the shell shows only the `ProjectSelector` with its tooltip icon.
+The `loading` and `error` states render a panel div without any heading. The
+`success` state has two distinct modes determined solely by `tickets.length`:
+
+**Mode A** (tickets exist): renders a `<section aria-labelledby=…>` with a
+`.recent-tickets-header` flex row containing an h2 "Recent tickets" and a
+"Create ticket" button that calls `onOpenCreationModal` and receives the
+`triggerRef` prop (so the creation modal can return focus to it on close). Followed by
+`<ol className="recent-tickets-list">` with each ticket showing the title as an
+`<a>` link (`target="_blank" rel="noopener noreferrer"`), the issue key, and a
+`<time>` element with the ISO `dateTime` attribute. No inline creation form.
+
+**Mode B** (zero tickets): renders a `<div className="recent-tickets-panel
+first-ticket-panel">` with an h2 "Create your first Jira ticket!" heading, an
+intro paragraph, and a `TicketCreationForm` that calls `onTicketCreated` on
+success. No "Recent tickets" heading, no ticket list, and no empty-state text.
+
+**Debouncing vs. immediate refresh** and **stale-response prevention** are
+unchanged: three `useEffect` hooks (unmount cleanup, debounced key changes, and
+immediate refresh on `refreshKey`), an `AbortController` per fetch, and stale
+checks in `.then`/`.catch` handlers.
+
+### End-to-end flow
+
+```
+AuthenticatedShell (projectKey, refreshKey, creationModalOpen, ticketCreationSubmitting, jiraState, jiraRefreshSignal, createTicketTriggerRef)
+  |-> JiraConnectionPanel (header: red/green dot; gear button when connected; onStatusChange; externalRefreshSignal)
+  |-> [disconnected] JiraInlineConnectForm -> POST /api/jira/connection -> setJiraState(connected) + jiraRefreshSignal++ -> re-fetch
+  |-> [connected] ProjectSelector (disabled while creationModalOpen || ticketCreationSubmitting; info icon tooltip when no valid key)
+  |-> [connected + valid key] RecentTicketsPanel (projectKey, refreshKey, onOpenCreationModal, onTicketCreated, triggerRef, onSubmittingChange)
+  |     Mode A: list + "Create ticket" (ref=triggerRef) -> opens TicketCreationModal
+  |     Mode B: TicketCreationForm (onSubmittingChange) -> POST /api/tickets -> onTicketCreated -> refreshKey++
+  |     Error: safe copy + Retry
+  |     -> GET /api/tickets?projectKey=<key> (debounced / immediate on refresh)
+  |-> [connected] TicketCreationModal (open, onClose, onTicketCreated, triggerRef, onSubmittingChange)
+        -> TicketCreationForm (onSubmittingChange) -> POST /api/tickets -> onClose + refreshKey++
+```
 
 ## API-key authentication (Milestone 12)
 
