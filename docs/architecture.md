@@ -977,14 +977,21 @@ authentication paths.
 
 ### Local provisioning CLI scripts
 
-Two CLI scripts provide local key management:
+Two CLI scripts provide local key management. There is no management UI and no REST
+provisioning endpoint in M12; all provisioning is through these two scripts.
 
 - `api-key-create.ts` (`npm run api-key:create --workspace apps/api -- --email <email>`)
-  — resolves the user by globally unique email using
-  `UserRepository.findByEmailForAuthentication`, derives `tenantId` and `userId`
-  from the stored user record (never from CLI arguments), generates and persists the
-  key via `ApiKeyService.create`, and prints the full key once with a clear warning
-  that it cannot be retrieved again.
+  — validates the email address before any database access: trims input, requires
+  exactly one `@`, a non-empty local part, a non-empty domain with at least one dot
+  but no leading or trailing dot, no embedded whitespace, and at most 254 characters.
+  A malformed or overlong address produces a format error that is distinct from a
+  user-not-found error. Any argument or validation failure exits non-zero. On a valid
+  address, the script resolves the user by globally unique email using
+  `UserRepository.findByEmailForAuthentication`, derives `tenantId` and `userId` from
+  the stored user record (never from CLI arguments), generates and persists the key
+  via `ApiKeyService.create`, and prints the full plaintext key exactly once with a
+  clear warning that it cannot be retrieved again. Success exits 0.
 - `api-key-revoke.ts` (`npm run api-key:revoke --workspace apps/api -- --key-id <id>`)
-  — calls `ApiKeyService.revoke(keyId)` and physically deletes the row. Idempotent:
-  an already-absent key ID exits cleanly with a confirmation message.
+  — calls `ApiKeyService.revoke(keyId)` and physically deletes the row. Missing or
+  empty `--key-id` exits non-zero. An already-absent key ID exits 0 and reports that
+  no row was found (idempotent — no tombstone, no failure).

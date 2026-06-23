@@ -55,11 +55,12 @@ export function validateEmail(raw: string): string {
   if (/\s/.test(trimmed)) {
     throw new Error(`"${trimmed}" is not a valid email address.`);
   }
-  const atIndex = trimmed.indexOf('@');
-  if (atIndex <= 0) {
+  const firstAt = trimmed.indexOf('@');
+  // Require exactly one '@': no '@' → invalid, second '@' → invalid, '@' at 0 → empty local.
+  if (firstAt <= 0 || trimmed.indexOf('@', firstAt + 1) !== -1) {
     throw new Error(`"${trimmed}" is not a valid email address.`);
   }
-  const domain = trimmed.slice(atIndex + 1);
+  const domain = trimmed.slice(firstAt + 1);
   if (!domain || !domain.includes('.') || domain.startsWith('.') || domain.endsWith('.')) {
     throw new Error(`"${trimmed}" is not a valid email address.`);
   }

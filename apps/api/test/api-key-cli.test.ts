@@ -76,6 +76,18 @@ describe('CLI create: email format validation', () => {
     expect(() => runCreate(['--email', 'user@domain.'], db)).toThrow('is not a valid email address');
   });
 
+  it('throws for multiple @ characters (a@b@c.com)', () => {
+    expect(() => runCreate(['--email', 'a@b@c.com'], db)).toThrow('is not a valid email address');
+  });
+
+  it('throws for a missing domain (user@ with nothing after)', () => {
+    expect(() => runCreate(['--email', 'user@'], db)).toThrow('is not a valid email address');
+  });
+
+  it('throws for a domain starting with a dot (user@.domain.com)', () => {
+    expect(() => runCreate(['--email', 'user@.domain.com'], db)).toThrow('is not a valid email address');
+  });
+
   it('email validation error is distinct from the "user not found" error', () => {
     let formatMsg = '';
     let notFoundMsg = '';
@@ -134,6 +146,22 @@ describe('CLI create: validateEmail', () => {
 
   it('rejects a domain with no dot', () => {
     expect(() => validateEmail('user@localhost')).toThrow('is not a valid email address');
+  });
+
+  it('rejects multiple @ characters', () => {
+    expect(() => validateEmail('a@b@c.com')).toThrow('is not a valid email address');
+  });
+
+  it('rejects a missing domain (user@ with nothing after)', () => {
+    expect(() => validateEmail('user@')).toThrow('is not a valid email address');
+  });
+
+  it('rejects a domain starting with a dot', () => {
+    expect(() => validateEmail('user@.domain.com')).toThrow('is not a valid email address');
+  });
+
+  it('rejects a domain ending with a dot', () => {
+    expect(() => validateEmail('user@domain.')).toThrow('is not a valid email address');
   });
 });
 

@@ -538,13 +538,28 @@ cumulatively as later milestones add functionality.
 - **Key format: `nhi_<keyId>.<secret>`.** `.` is not in the base64url alphabet, so
   the format is unambiguous regardless of base64url characters in the components.
 - **Plaintext is shown only during local provisioning.** The create CLI prints the
-  full key once with a clear warning that it cannot be retrieved again.
+  full key exactly once with a clear warning that it cannot be retrieved again.
+  Success exits with code 0; any argument or validation failure exits with a non-zero
+  code.
+- **The create CLI validates email format before the database lookup.** Input is
+  trimmed; the validator requires exactly one `@`, a non-empty local part, a
+  non-empty domain containing at least one dot but no dot at the start or end of the
+  domain, no internal whitespace, and a maximum length of 254 characters. A malformed
+  or overlong address produces a format error that is intentionally distinct from a
+  user-not-found error, so callers can tell the two apart without ambiguity.
 - **The POC has no automatic expiration or rotation.** Keys remain valid until
   explicitly revoked. Production alternatives include time-bounded tokens, automatic
   rotation, last-used tracking, and administrative key management.
 - **Revocation physically deletes the record; no revocation history is retained.**
   After revocation, the key ID is permanently indistinguishable from an unknown key,
   and no tombstone, `revoked_at` value, secret hash, or audit history is kept.
+- **Revocation is idempotent.** Revoking a key ID that has already been removed or
+  was never created exits with code 0 and reports that no row was found, rather than
+  failing. There is no tombstone: after revocation the key ID is indistinguishable
+  from a key that never existed.
+- **No API-key management UI or REST provisioning endpoints in M12.** Keys are
+  created and revoked only through the two local CLI scripts. The management UI and
+  REST endpoints are deferred to a later milestone.
 - **No external ticket REST endpoint in M12.** M13 will add the external ticket
   creation endpoint that uses API-key authentication. M12 only provides the
   authentication infrastructure.
