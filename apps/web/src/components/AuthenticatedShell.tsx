@@ -1,6 +1,8 @@
 import { useCallback, useRef, useState } from 'react';
 import { AuthError, logout, type SafeUser } from '../api/auth';
+import type { JiraConnectionStatus } from '../api/jira';
 import JiraConnectionPanel from './JiraConnectionPanel';
+import JiraInlineConnectForm from './JiraInlineConnectForm';
 import ProjectSelector from './ProjectSelector';
 import RecentTicketsPanel from './RecentTicketsPanel';
 import TicketCreationModal from './TicketCreationModal';
@@ -22,23 +24,31 @@ function logoutMessage(error: unknown): string {
  * Authenticated application shell.
  *
  * Layout:
- * - Header: product name, user info, sign-out, compact Jira connection status.
- * - Main: page-level ProjectSelector (when Jira connected), then one of:
- *   - No valid project: compact prompt.
- *   - Valid project: RecentTicketsPanel (Mode A or Mode B depending on tickets).
+ * - Header: product name, Jira status bar (left of user area), user email,
+ *   sign-out. User display name is not shown in the header.
+ * - Main: varies by Jira connection state:
+ *   - Loading: nothing extra (Jira status shows "Loading…" in header).
+ *   - Disconnected: JiraInlineConnectForm (full inline connect form).
+ *   - Connected: ProjectSelector → no-project prompt or RecentTicketsPanel.
  * - TicketCreationModal: floating modal for Mode A ticket creation.
  *
- * Internal user and tenant IDs are never rendered. The project key is shared
- * state: ProjectSelector owns the input; RecentTicketsPanel and
- * TicketCreationModal read it as a prop.
+ * One authoritative Jira connection state lives here: `jiraConnected`
+ * (whether connected) and `jiraLoading` (whether the status is being fetched).
+ * Both are reported by JiraConnectionPanel via callbacks. JiraInlineConnectForm
+ * calls saveJiraConnection directly and on success increments
+ * `jiraRefreshSignal`, which tells JiraConnectionPanel to re-fetch so the
+ * header updates.
  */
 export default function AuthenticatedShell({ user, onLoggedOut }: AuthenticatedShellProps) {
   const [loggingOut, setLoggingOut] = useState(false);
   const [logoutError, setLogoutError] = useState<string | null>(null);
   const [jiraConnected, setJiraConnected] = useState(false);
+  const [jiraLoading, setJiraLoading] = useState(true);
+  const [jiraRefreshSignal, setJiraRefreshSignal] = useState(0);
   const [projectKey, setProjectKey] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
   const [creationModalOpen, setCreationModalOpen] = useState(false);
+  const [ticketCreationSubmitting, setTicketCreationSubmitting] = useState(false);
 
   const createTicketTriggerRef = useRef<HTMLButtonElement>(null);
 
@@ -46,8 +56,17 @@ export default function AuthenticatedShell({ user, onLoggedOut }: AuthenticatedS
     setJiraConnected(connected);
   }, []);
 
+  const handleJiraLoading = useCallback((loading: boolean) => {
+    setJiraLoading(loading);
+  }, []);
+
   const handleConnectionSaved = useCallback(() => {
     setRefreshKey((k) => k + 1);
+  }, []);
+
+  const handleInlineConnectSuccess = useCallback((_connection: JiraConnectionStatus) => {
+    // Tell the panel to re-fetch so the header reflects the new connected state.
+    setJiraRefreshSignal((s) => s + 1);
   }, []);
 
   const handleTicketCreated = useCallback(() => {
@@ -60,6 +79,10 @@ export default function AuthenticatedShell({ user, onLoggedOut }: AuthenticatedS
 
   const handleCloseCreationModal = useCallback(() => {
     setCreationModalOpen(false);
+  }, []);
+
+  const handleTicketCreationSubmittingChange = useCallback((submitting: boolean) => {
+    setTicketCreationSubmitting(submitting);
   }, []);
 
   const handleLogout = () => {
@@ -86,9 +109,10 @@ export default function AuthenticatedShell({ user, onLoggedOut }: AuthenticatedS
           <JiraConnectionPanel
             onConnectionChange={handleConnectionChange}
             onConnectionSaved={handleConnectionSaved}
+            onLoadingChange={handleJiraLoading}
+            externalRefreshSignal={jiraRefreshSignal}
           />
           <div className="app-user">
-            <span className="user-name">{user.displayName}</span>
             <span className="user-email">{user.email}</span>
             <button type="button" onClick={handleLogout} disabled={loggingOut}>
               {loggingOut ? 'Signing out…' : 'Sign out'}
@@ -99,7 +123,6 @@ export default function AuthenticatedShell({ user, onLoggedOut }: AuthenticatedS
 
       <main className="app-main">
         <h1>Welcome, {user.displayName}</h1>
-        <p>You are signed in to NHI Issues Management.</p>
 
         {logoutError && (
           <p className="form-error" role="alert">
@@ -107,11 +130,16 @@ export default function AuthenticatedShell({ user, onLoggedOut }: AuthenticatedS
           </p>
         )}
 
+        {!jiraConnected && !jiraLoading && (
+          <JiraInlineConnectForm onSuccess={handleInlineConnectSuccess} />
+        )}
+
         {jiraConnected && (
           <>
             <ProjectSelector
               value={projectKey}
               onChange={setProjectKey}
+              disabled={creationModalOpen || ticketCreationSubmitting}
             />
 
             {!hasValidProject ? (
@@ -125,6 +153,7 @@ export default function AuthenticatedShell({ user, onLoggedOut }: AuthenticatedS
                 onOpenCreationModal={handleOpenCreationModal}
                 onTicketCreated={handleTicketCreated}
                 triggerRef={createTicketTriggerRef}
+                onSubmittingChange={handleTicketCreationSubmittingChange}
               />
             )}
           </>
@@ -138,6 +167,7 @@ export default function AuthenticatedShell({ user, onLoggedOut }: AuthenticatedS
           onClose={handleCloseCreationModal}
           onTicketCreated={handleTicketCreated}
           triggerRef={createTicketTriggerRef}
+          onSubmittingChange={handleTicketCreationSubmittingChange}
         />
       )}
     </div>

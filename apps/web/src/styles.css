@@ -230,7 +230,7 @@ button.secondary {
 }
 
 .jira-indicator-disconnected {
-  background: var(--color-muted);
+  background: var(--color-error);
 }
 
 .jira-label-connected {
@@ -239,7 +239,55 @@ button.secondary {
 }
 
 .jira-label-disconnected {
+  color: var(--color-error);
+}
+
+.jira-gear-button {
+  background: transparent;
+  border: 1px solid var(--color-border);
   color: var(--color-muted);
+  padding: 0.2rem 0.4rem;
+  font-size: 0.9rem;
+  line-height: 1;
+  border-radius: 0.35rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 400;
+}
+
+.jira-gear-button:hover {
+  color: var(--color-text);
+  border-color: var(--color-muted);
+}
+
+/* --------------------------------------------------------------------------
+   Jira inline connect form (in main content, when disconnected)
+   -------------------------------------------------------------------------- */
+
+.jira-inline-connect {
+  margin-top: 2rem;
+  padding: 1.5rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  max-width: 36rem;
+}
+
+.jira-inline-connect h2 {
+  margin-top: 0;
+  font-size: 1.1rem;
+}
+
+.jira-inline-connect .field + .field {
+  margin-top: 1rem;
+}
+
+.jira-inline-connect form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
 }
 
 /* --------------------------------------------------------------------------

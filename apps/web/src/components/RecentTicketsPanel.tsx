@@ -33,6 +33,11 @@ interface RecentTicketsPanelProps {
    * modal can return focus to it after closing.
    */
   triggerRef?: RefObject<HTMLButtonElement>;
+  /**
+   * Called with `true` when Mode B inline submission starts and `false` after
+   * every resolve or reject, so the shell can disable the project selector.
+   */
+  onSubmittingChange?: (submitting: boolean) => void;
 }
 
 const DEBOUNCE_MS = 400;
@@ -57,6 +62,7 @@ export default function RecentTicketsPanel({
   onOpenCreationModal,
   onTicketCreated,
   triggerRef,
+  onSubmittingChange,
 }: RecentTicketsPanelProps) {
   const headingId = useId();
   const [listState, setListState] = useState<ListState>({ type: 'prompt' });
@@ -189,6 +195,7 @@ export default function RecentTicketsPanel({
         <TicketCreationForm
           projectKey={normalizedKey}
           onSuccess={() => onTicketCreated?.()}
+          onSubmittingChange={onSubmittingChange}
         />
       </div>
     );

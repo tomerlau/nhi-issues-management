@@ -7,6 +7,7 @@ interface TicketCreationModalProps {
   onClose: () => void;
   onTicketCreated: () => void;
   triggerRef?: React.RefObject<HTMLButtonElement>;
+  onSubmittingChange?: (submitting: boolean) => void;
 }
 
 /**
@@ -25,10 +26,16 @@ export default function TicketCreationModal({
   onClose,
   onTicketCreated,
   triggerRef,
+  onSubmittingChange,
 }: TicketCreationModalProps) {
   const headingId = useId();
   const modalRef = useRef<HTMLDivElement>(null);
   const [isFormSubmitting, setIsFormSubmitting] = useState(false);
+
+  const handleSubmittingChange = (submitting: boolean) => {
+    setIsFormSubmitting(submitting);
+    onSubmittingChange?.(submitting);
+  };
 
   useEffect(() => {
     if (open) {
@@ -85,7 +92,7 @@ export default function TicketCreationModal({
           <TicketCreationForm
             projectKey={projectKey}
             onSuccess={handleSuccess}
-            onSubmittingChange={setIsFormSubmitting}
+            onSubmittingChange={handleSubmittingChange}
           />
         </div>
       </div>

@@ -296,18 +296,20 @@ describe('project selector gating', () => {
 // ---------------------------------------------------------------------------
 
 describe('compact Jira status bar', () => {
-  it('shows "Jira not connected" and "Connect Jira" button when disconnected', async () => {
+  it('shows "Jira not connected" with no button in the header when disconnected', async () => {
     mockedRestore.mockResolvedValue(alice);
     mockedGetJira.mockResolvedValue({ connected: false });
 
     render(<App />);
-    await screen.findByText(/welcome, alice anderson/i);
     await screen.findByText(/jira not connected/i);
 
-    expect(screen.getByRole('button', { name: /^connect jira$/i })).toBeInTheDocument();
+    const header = screen.getByRole('banner');
+    // No Connect Jira or Manage button in the header — only in main content as inline form submit.
+    expect(within(header).queryByRole('button', { name: /^connect jira$/i })).not.toBeInTheDocument();
+    expect(within(header).queryByRole('button', { name: /manage jira connection/i })).not.toBeInTheDocument();
   });
 
-  it('shows "Jira connected" and "Manage" button when connected', async () => {
+  it('shows "Jira connected" and gear button when connected', async () => {
     mockedRestore.mockResolvedValue(alice);
     mockedGetJira.mockResolvedValue({
       connected: true,
@@ -318,7 +320,8 @@ describe('compact Jira status bar', () => {
     render(<App />);
     await screen.findByText(/jira connected/i);
 
-    expect(screen.getByRole('button', { name: /^manage$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /manage jira connection/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^manage$/i })).not.toBeInTheDocument();
   });
 
   it('does NOT show the Jira site URL on the page (only inside the modal)', async () => {
@@ -610,6 +613,197 @@ describe('Mode A modal behaviour', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Project selector locking
+// ---------------------------------------------------------------------------
+
+describe('project selector locking', () => {
+  const connectedJira = {
+    connected: true as const,
+    siteUrl: 'https://acme.atlassian.net',
+    email: 'alice@example.com',
+  };
+
+  const EXISTING_TICKET: RecentTicket = {
+    issueId: '10001',
+    issueKey: 'SCRUM-1',
+    title: 'Existing ticket',
+    createdAt: '2024-01-01T00:00:00.000Z',
+    url: 'https://acme.atlassian.net/browse/SCRUM-1',
+  };
+
+  async function renderModeA() {
+    mockedRestore.mockResolvedValue(alice);
+    mockedGetJira.mockResolvedValue(connectedJira);
+    mockedListRecentTickets.mockResolvedValue({ tickets: [EXISTING_TICKET] });
+    render(<App />);
+    await screen.findByLabelText(/jira project/i);
+    typeInto(/jira project/i, 'SCRUM');
+    await act(async () => { vi.advanceTimersByTime(600); });
+    await screen.findByRole('heading', { name: /recent tickets/i });
+  }
+
+  async function renderModeB() {
+    mockedRestore.mockResolvedValue(alice);
+    mockedGetJira.mockResolvedValue(connectedJira);
+    mockedListRecentTickets.mockResolvedValue({ tickets: [] });
+    render(<App />);
+    await screen.findByLabelText(/jira project/i);
+    typeInto(/jira project/i, 'SCRUM');
+    await act(async () => { vi.advanceTimersByTime(600); });
+    await screen.findByRole('heading', { name: /create your first jira ticket/i });
+  }
+
+  // — Mode A: selector locking around the creation modal —
+
+  it('selector is enabled before the Mode A modal opens', async () => {
+    await renderModeA();
+
+    expect(screen.getByLabelText(/jira project/i)).not.toBeDisabled();
+  });
+
+  it('selector becomes disabled immediately when the modal opens', async () => {
+    await renderModeA();
+
+    fireEvent.click(screen.getByRole('button', { name: /^create ticket$/i }));
+    await screen.findByRole('dialog');
+
+    expect(screen.getByLabelText(/jira project/i)).toBeDisabled();
+  });
+
+  it('selector remains disabled while a modal submission is in flight', async () => {
+    await renderModeA();
+    mockedCreateTicket.mockReturnValue(new Promise<CreatedTicket>(() => {}));
+
+    fireEvent.click(screen.getByRole('button', { name: /^create ticket$/i }));
+    await screen.findByRole('dialog');
+
+    const dialog = screen.getByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText(/title/i), { target: { value: 'My ticket' } });
+    fireEvent.change(within(dialog).getByLabelText(/description/i), { target: { value: 'Details' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: /^create ticket$/i }));
+
+    expect(screen.getByLabelText(/jira project/i)).toBeDisabled();
+  });
+
+  it('selector remains disabled after a definite failure while the modal is still open', async () => {
+    await renderModeA();
+    mockedCreateTicket.mockRejectedValue(new TicketApiError('not_connected', 'x'));
+
+    fireEvent.click(screen.getByRole('button', { name: /^create ticket$/i }));
+    await screen.findByRole('dialog');
+
+    const dialog = screen.getByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText(/title/i), { target: { value: 'My ticket' } });
+    fireEvent.change(within(dialog).getByLabelText(/description/i), { target: { value: 'Details' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: /^create ticket$/i }));
+
+    await within(dialog).findByRole('alert');
+
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.getByLabelText(/jira project/i)).toBeDisabled();
+  });
+
+  it('selector becomes enabled after closing the failed modal', async () => {
+    await renderModeA();
+    mockedCreateTicket.mockRejectedValue(new TicketApiError('not_connected', 'x'));
+
+    fireEvent.click(screen.getByRole('button', { name: /^create ticket$/i }));
+    await screen.findByRole('dialog');
+
+    const dialog = screen.getByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText(/title/i), { target: { value: 'My ticket' } });
+    fireEvent.change(within(dialog).getByLabelText(/description/i), { target: { value: 'Details' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: /^create ticket$/i }));
+
+    await within(dialog).findByRole('alert');
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^close$/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    expect(screen.getByLabelText(/jira project/i)).not.toBeDisabled();
+  });
+
+  it('selector becomes enabled and project is unchanged after successful modal creation', async () => {
+    mockedRestore.mockResolvedValue(alice);
+    mockedGetJira.mockResolvedValue(connectedJira);
+    mockedListRecentTickets
+      .mockResolvedValueOnce({ tickets: [EXISTING_TICKET] })
+      .mockResolvedValue({ tickets: [EXISTING_TICKET] });
+    mockedCreateTicket.mockResolvedValue({ issueId: '10002', issueKey: 'SCRUM-2' });
+
+    render(<App />);
+    await screen.findByLabelText(/jira project/i);
+    typeInto(/jira project/i, 'SCRUM');
+    await act(async () => { vi.advanceTimersByTime(600); });
+    await screen.findByRole('heading', { name: /recent tickets/i });
+
+    fireEvent.click(screen.getByRole('button', { name: /^create ticket$/i }));
+    await screen.findByRole('dialog');
+
+    const dialog = screen.getByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText(/title/i), { target: { value: 'New ticket' } });
+    fireEvent.change(within(dialog).getByLabelText(/description/i), { target: { value: 'Details' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: /^create ticket$/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    expect(screen.getByLabelText(/jira project/i)).not.toBeDisabled();
+    expect((screen.getByLabelText(/jira project/i) as HTMLInputElement).value).toBe('SCRUM');
+  });
+
+  // — Mode B: selector locking around inline submission —
+
+  it('selector is enabled while the Mode B inline form is idle', async () => {
+    await renderModeB();
+
+    expect(screen.getByLabelText(/jira project/i)).not.toBeDisabled();
+  });
+
+  it('selector becomes disabled when Mode B inline submission starts', async () => {
+    await renderModeB();
+    mockedCreateTicket.mockReturnValue(new Promise<CreatedTicket>(() => {}));
+
+    typeInto(/title/i, 'First ticket');
+    typeInto(/description/i, 'Details');
+    fireEvent.click(screen.getByRole('button', { name: /^create ticket$/i }));
+
+    expect(screen.getByLabelText(/jira project/i)).toBeDisabled();
+  });
+
+  it('selector becomes enabled after a definite Mode B failure', async () => {
+    await renderModeB();
+    mockedCreateTicket.mockRejectedValue(new TicketApiError('not_connected', 'x'));
+
+    typeInto(/title/i, 'First ticket');
+    typeInto(/description/i, 'Details');
+    fireEvent.click(screen.getByRole('button', { name: /^create ticket$/i }));
+
+    await screen.findByRole('alert');
+
+    expect(screen.getByLabelText(/jira project/i)).not.toBeDisabled();
+    expect((screen.getByLabelText(/jira project/i) as HTMLInputElement).value).toBe('SCRUM');
+  });
+
+  it('selector becomes enabled after an uncertain Mode B failure', async () => {
+    await renderModeB();
+    mockedCreateTicket.mockRejectedValue(new TicketApiError('network', 'x'));
+
+    typeInto(/title/i, 'First ticket');
+    typeInto(/description/i, 'Details');
+    fireEvent.click(screen.getByRole('button', { name: /^create ticket$/i }));
+
+    await screen.findByRole('alert');
+
+    expect(screen.getByLabelText(/jira project/i)).not.toBeDisabled();
+    expect((screen.getByLabelText(/jira project/i) as HTMLInputElement).value).toBe('SCRUM');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Ticket creation refreshes recent tickets
 // ---------------------------------------------------------------------------
 
@@ -723,8 +917,8 @@ describe('connection save refreshes recent tickets', () => {
       email: 'alice@example.com',
     });
 
-    // Open the Jira modal via "Manage".
-    fireEvent.click(screen.getByRole('button', { name: /^manage$/i }));
+    // Open the Jira modal via the gear button.
+    fireEvent.click(screen.getByRole('button', { name: /manage jira connection/i }));
     await screen.findByRole('dialog');
 
     fireEvent.change(screen.getByLabelText(/site url/i), {
@@ -763,7 +957,7 @@ describe('connection save refreshes recent tickets', () => {
 
     mockedSaveJira.mockRejectedValue(new JiraApiError('credentials_rejected', 'x'));
 
-    fireEvent.click(screen.getByRole('button', { name: /^manage$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /manage jira connection/i }));
     await screen.findByRole('dialog');
 
     fireEvent.change(screen.getByLabelText(/site url/i), {
@@ -813,8 +1007,346 @@ describe('logout', () => {
     fireEvent.click(screen.getByRole('button', { name: /sign out/i }));
 
     const header = screen.getByRole('banner');
-    expect(within(header).getByText('Alice Anderson')).toBeInTheDocument();
+    expect(within(header).getByText('alice@example.com')).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/still signed in/i));
     expect(screen.getByRole('button', { name: /sign out/i })).toBeEnabled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Header content
+// ---------------------------------------------------------------------------
+
+describe('header content', () => {
+  it('does not render the user display name in the header', async () => {
+    mockedRestore.mockResolvedValue(alice);
+    render(<App />);
+    await screen.findByText(/welcome, alice anderson/i);
+
+    const header = screen.getByRole('banner');
+    expect(within(header).queryByText('Alice Anderson')).not.toBeInTheDocument();
+  });
+
+  it('renders the authenticated user email in the header', async () => {
+    mockedRestore.mockResolvedValue(alice);
+    render(<App />);
+    await screen.findByText(/welcome, alice anderson/i);
+
+    const header = screen.getByRole('banner');
+    expect(within(header).getByText('alice@example.com')).toBeInTheDocument();
+  });
+
+  it('does not render the signed-in explanatory sentence', async () => {
+    mockedRestore.mockResolvedValue(alice);
+    render(<App />);
+    await screen.findByText(/welcome, alice anderson/i);
+
+    expect(
+      screen.queryByText(/you are signed in to NHI Issues Management/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it('shows the connected indicator class when Jira is connected', async () => {
+    mockedRestore.mockResolvedValue(alice);
+    mockedGetJira.mockResolvedValue({
+      connected: true,
+      siteUrl: 'https://acme.atlassian.net',
+      email: 'alice@example.com',
+    });
+    render(<App />);
+    await screen.findByText(/jira connected/i);
+
+    expect(document.querySelector('.jira-indicator-connected')).toBeInTheDocument();
+    expect(document.querySelector('.jira-indicator-disconnected')).not.toBeInTheDocument();
+  });
+
+  it('shows the disconnected indicator class when Jira is not connected', async () => {
+    mockedRestore.mockResolvedValue(alice);
+    mockedGetJira.mockResolvedValue({ connected: false });
+    render(<App />);
+    await screen.findByText(/jira not connected/i);
+
+    expect(document.querySelector('.jira-indicator-disconnected')).toBeInTheDocument();
+    expect(document.querySelector('.jira-indicator-connected')).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Disconnected Jira — inline connection form
+// ---------------------------------------------------------------------------
+
+describe('disconnected Jira — inline connection form', () => {
+  async function renderDisconnected() {
+    mockedRestore.mockResolvedValue(alice);
+    mockedGetJira.mockResolvedValue({ connected: false });
+    render(<App />);
+    await screen.findByText(/jira not connected/i);
+    // Inline form appears once loading resolves as disconnected.
+    await screen.findByLabelText(/jira cloud site url/i);
+  }
+
+  it('renders the inline connection form in main content when disconnected', async () => {
+    await renderDisconnected();
+
+    expect(screen.getByLabelText(/jira cloud site url/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/atlassian account email/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/atlassian api token/i)).toBeInTheDocument();
+  });
+
+  it('does not open a dialog for the disconnected state', async () => {
+    await renderDisconnected();
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('inline form fields are not inside a dialog', async () => {
+    await renderDisconnected();
+
+    const siteUrlInput = screen.getByLabelText(/jira cloud site url/i);
+    expect(siteUrlInput.closest('[role="dialog"]')).toBeNull();
+  });
+
+  it('does not show ProjectSelector before connection', async () => {
+    await renderDisconnected();
+
+    expect(screen.queryByLabelText(/jira project/i)).not.toBeInTheDocument();
+  });
+
+  it('shows the tenant-sharing disclaimer in the inline form', async () => {
+    await renderDisconnected();
+
+    expect(screen.getByText(/shared by everyone in your tenant/i)).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('shows a Connect Jira submit button in main content', async () => {
+    await renderDisconnected();
+
+    const submitBtn = screen.getByRole('button', { name: /^connect jira$/i });
+    expect(submitBtn.closest('[role="dialog"]')).toBeNull();
+  });
+
+  it('successful connection: calls save once, removes inline form, shows gear, shows ProjectSelector', async () => {
+    mockedRestore.mockResolvedValue(alice);
+    mockedGetJira
+      .mockResolvedValueOnce({ connected: false })
+      .mockResolvedValue({
+        connected: true,
+        siteUrl: 'https://acme.atlassian.net',
+        email: 'alice@example.com',
+      });
+    mockedSaveJira.mockResolvedValue({
+      connected: true,
+      siteUrl: 'https://acme.atlassian.net',
+      email: 'alice@example.com',
+    });
+
+    render(<App />);
+    await screen.findByLabelText(/jira cloud site url/i);
+
+    fireEvent.change(screen.getByLabelText(/jira cloud site url/i), {
+      target: { value: 'https://acme.atlassian.net' },
+    });
+    fireEvent.change(screen.getByLabelText(/atlassian account email/i), {
+      target: { value: 'alice@example.com' },
+    });
+    fireEvent.change(screen.getByLabelText(/atlassian api token/i), {
+      target: { value: 'secret-token' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^connect jira$/i }));
+
+    expect(mockedSaveJira).toHaveBeenCalledTimes(1);
+    expect(mockedSaveJira).toHaveBeenCalledWith({
+      siteUrl: 'https://acme.atlassian.net',
+      email: 'alice@example.com',
+      apiToken: 'secret-token',
+    });
+
+    // After success: inline form gone, connected header, gear button, ProjectSelector.
+    await waitFor(() => {
+      expect(screen.queryByLabelText(/jira cloud site url/i)).not.toBeInTheDocument();
+    });
+    await screen.findByText(/jira connected/i);
+    expect(screen.getByRole('button', { name: /manage jira connection/i })).toBeInTheDocument();
+    await screen.findByLabelText(/jira project/i);
+  });
+
+  it('successful connection does not show a persistent success message', async () => {
+    mockedRestore.mockResolvedValue(alice);
+    mockedGetJira
+      .mockResolvedValueOnce({ connected: false })
+      .mockResolvedValue({
+        connected: true,
+        siteUrl: 'https://acme.atlassian.net',
+        email: 'alice@example.com',
+      });
+    mockedSaveJira.mockResolvedValue({
+      connected: true,
+      siteUrl: 'https://acme.atlassian.net',
+      email: 'alice@example.com',
+    });
+
+    render(<App />);
+    await screen.findByLabelText(/jira cloud site url/i);
+
+    fireEvent.change(screen.getByLabelText(/jira cloud site url/i), { target: { value: 'https://acme.atlassian.net' } });
+    fireEvent.change(screen.getByLabelText(/atlassian account email/i), { target: { value: 'alice@example.com' } });
+    fireEvent.change(screen.getByLabelText(/atlassian api token/i), { target: { value: 'tok' } });
+    fireEvent.click(screen.getByRole('button', { name: /^connect jira$/i }));
+
+    await screen.findByText(/jira connected/i);
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  it('failed connection: keeps inline form, shows error, does not show ProjectSelector', async () => {
+    mockedRestore.mockResolvedValue(alice);
+    mockedGetJira.mockResolvedValue({ connected: false });
+    mockedSaveJira.mockRejectedValue(new JiraApiError('credentials_rejected', 'ignored'));
+
+    render(<App />);
+    await screen.findByLabelText(/jira cloud site url/i);
+
+    fireEvent.change(screen.getByLabelText(/jira cloud site url/i), { target: { value: 'https://acme.atlassian.net' } });
+    fireEvent.change(screen.getByLabelText(/atlassian account email/i), { target: { value: 'alice@example.com' } });
+    fireEvent.change(screen.getByLabelText(/atlassian api token/i), { target: { value: 'bad-token' } });
+    fireEvent.click(screen.getByRole('button', { name: /^connect jira$/i }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toBeInTheDocument();
+    expect(screen.getByLabelText(/jira cloud site url/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/jira project/i)).not.toBeInTheDocument();
+  });
+
+  it('clears the API token immediately when submission begins', async () => {
+    mockedRestore.mockResolvedValue(alice);
+    mockedGetJira.mockResolvedValue({ connected: false });
+    mockedSaveJira.mockReturnValue(new Promise(() => {}));
+
+    render(<App />);
+    await screen.findByLabelText(/jira cloud site url/i);
+
+    fireEvent.change(screen.getByLabelText(/jira cloud site url/i), { target: { value: 'https://acme.atlassian.net' } });
+    fireEvent.change(screen.getByLabelText(/atlassian account email/i), { target: { value: 'alice@example.com' } });
+    const tokenField = screen.getByLabelText(/atlassian api token/i) as HTMLInputElement;
+    fireEvent.change(tokenField, { target: { value: 'secret' } });
+    fireEvent.click(screen.getByRole('button', { name: /^connect jira$/i }));
+
+    expect(tokenField.value).toBe('');
+    expect(screen.getByRole('button', { name: /connecting/i })).toBeDisabled();
+  });
+
+  it('pending submission: disables inputs and submit, sends only one request', async () => {
+    mockedRestore.mockResolvedValue(alice);
+    mockedGetJira.mockResolvedValue({ connected: false });
+    mockedSaveJira.mockReturnValue(new Promise(() => {}));
+
+    render(<App />);
+    await screen.findByLabelText(/jira cloud site url/i);
+
+    fireEvent.change(screen.getByLabelText(/jira cloud site url/i), { target: { value: 'https://acme.atlassian.net' } });
+    fireEvent.change(screen.getByLabelText(/atlassian account email/i), { target: { value: 'alice@example.com' } });
+    fireEvent.change(screen.getByLabelText(/atlassian api token/i), { target: { value: 'tok' } });
+
+    const submit = screen.getByRole('button', { name: /^connect jira$/i });
+    fireEvent.click(submit);
+    fireEvent.click(submit);
+
+    expect(mockedSaveJira).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText(/jira cloud site url/i)).toBeDisabled();
+    expect(screen.getByLabelText(/atlassian account email/i)).toBeDisabled();
+  });
+
+  it('client validation: shows error without calling backend when fields are empty', async () => {
+    await renderDisconnected();
+
+    fireEvent.click(screen.getByRole('button', { name: /^connect jira$/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/enter the jira site url/i);
+    expect(mockedSaveJira).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Connected Jira — gear opens manage modal
+// ---------------------------------------------------------------------------
+
+describe('connected Jira — gear opens manage modal', () => {
+  async function renderConnected() {
+    mockedRestore.mockResolvedValue(alice);
+    mockedGetJira.mockResolvedValue({
+      connected: true,
+      siteUrl: 'https://acme.atlassian.net',
+      email: 'alice@example.com',
+    });
+    render(<App />);
+    await screen.findByRole('button', { name: /manage jira connection/i });
+  }
+
+  it('gear button opens the manage modal', async () => {
+    await renderConnected();
+
+    fireEvent.click(screen.getByRole('button', { name: /manage jira connection/i }));
+
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /manage jira connection/i })).toBeInTheDocument();
+  });
+
+  it('existing connection details are shown only inside the modal, not on the page', async () => {
+    await renderConnected();
+
+    expect(screen.queryByText('https://acme.atlassian.net')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /manage jira connection/i }));
+    await screen.findByRole('dialog');
+
+    expect(within(screen.getByRole('dialog')).getByText('https://acme.atlassian.net')).toBeInTheDocument();
+  });
+
+  it('replacement form fields start empty (token never pre-populated)', async () => {
+    await renderConnected();
+
+    fireEvent.click(screen.getByRole('button', { name: /manage jira connection/i }));
+    await screen.findByRole('dialog');
+
+    const dialog = screen.getByRole('dialog');
+    expect((within(dialog).getByLabelText(/site url/i) as HTMLInputElement).value).toBe('');
+    expect((within(dialog).getByLabelText(/atlassian account email/i) as HTMLInputElement).value).toBe('');
+    expect((within(dialog).getByLabelText(/api token/i) as HTMLInputElement).value).toBe('');
+  });
+
+  it('cancel restores focus to the gear button', async () => {
+    await renderConnected();
+
+    fireEvent.click(screen.getByRole('button', { name: /manage jira connection/i }));
+    await screen.findByRole('dialog');
+
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^cancel$/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    await act(async () => { vi.runAllTimers(); });
+
+    expect(document.activeElement).toBe(
+      screen.getByRole('button', { name: /manage jira connection/i }),
+    );
+  });
+
+  it('close button restores focus to the gear button', async () => {
+    await renderConnected();
+
+    fireEvent.click(screen.getByRole('button', { name: /manage jira connection/i }));
+    await screen.findByRole('dialog');
+
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^close$/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    await act(async () => { vi.runAllTimers(); });
+
+    expect(document.activeElement).toBe(
+      screen.getByRole('button', { name: /manage jira connection/i }),
+    );
   });
 });

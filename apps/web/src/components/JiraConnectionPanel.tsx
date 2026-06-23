@@ -24,17 +24,27 @@ type LoadState =
 interface JiraConnectionPanelProps {
   onConnectionChange?: (connected: boolean) => void;
   onConnectionSaved?: () => void;
+  /** Called with `true` while fetching status, `false` when ready or errored. */
+  onLoadingChange?: (loading: boolean) => void;
+  /** Increment to trigger an immediate re-fetch of the connection status. */
+  externalRefreshSignal?: number;
 }
 
 /**
- * Compact Jira connection status bar. Shows the current connection state and
- * a trigger button ("Connect Jira" or "Manage") that opens a modal for
- * connection creation or replacement. Connection details (site URL, email) and
- * the tenant-sharing disclaimer are inside the modal only.
+ * Compact Jira connection status bar.
+ *
+ * Disconnected: red dot + "Jira not connected" text — no trigger button.
+ * Connected: green dot + "Jira connected" + gear-icon button that opens the
+ * "Manage Jira connection" modal for replacement.
+ *
+ * The initial connection form lives in the main content area (JiraInlineConnectForm),
+ * not inside this component.
  */
 export default function JiraConnectionPanel({
   onConnectionChange,
   onConnectionSaved,
+  onLoadingChange,
+  externalRefreshSignal,
 }: JiraConnectionPanelProps) {
   const modalHeadingId = useId();
   const siteUrlId = useId();
@@ -78,6 +88,16 @@ export default function JiraConnectionPanel({
   useEffect(() => {
     onConnectionChange?.(connectedNow);
   }, [connectedNow, onConnectionChange]);
+
+  const isLoading = load.status === 'loading';
+  useEffect(() => {
+    onLoadingChange?.(isLoading);
+  }, [isLoading, onLoadingChange]);
+
+  useEffect(() => {
+    if (!externalRefreshSignal) return;
+    refresh();
+  }, [externalRefreshSignal, refresh]);
 
   const openModal = () => {
     setFormError(null);
@@ -175,40 +195,43 @@ export default function JiraConnectionPanel({
     }
 
     const { connection } = load;
+    if (connection.connected) {
+      return (
+        <div className="jira-status-compact">
+          <span className="jira-indicator-connected" aria-hidden="true" />
+          <span className="jira-label-connected">Jira connected</span>
+          <button
+            ref={triggerRef}
+            type="button"
+            className="jira-gear-button"
+            aria-label="Manage Jira connection"
+            onClick={openModal}
+          >
+            <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 15.5A3.5 3.5 0 0 1 8.5 12 3.5 3.5 0 0 1 12 8.5a3.5 3.5 0 0 1 3.5 3.5 3.5 3.5 0 0 1-3.5 3.5m7.43-2.92c.04-.33.07-.67.07-1.08s-.03-.74-.07-1.08l2.33-1.82c.21-.16.27-.45.12-.68l-2.21-3.83c-.16-.22-.45-.3-.67-.22l-2.74 1.11c-.59-.45-1.22-.82-1.92-1.11l-.41-2.91C14.43 2.18 14.22 2 14 2h-4c-.22 0-.43.18-.46.42l-.41 2.91a9.32 9.32 0 0 0-1.93 1.11L4.46 5.33c-.22-.08-.51 0-.67.22L1.58 9.38c-.15.23-.09.52.12.68l2.33 1.82C4.03 12.26 4 12.6 4 13s.03.74.07 1.08L1.7 15.9c-.21.16-.27.45-.12.68l2.21 3.83c.16.22.45.3.67.22l2.74-1.11c.59.45 1.22.82 1.92 1.11l.41 2.91c.03.24.24.42.46.42h4c.22 0 .43-.18.46-.42l.41-2.91a9.32 9.32 0 0 0 1.93-1.11l2.74 1.11c.22.08.51 0 .67-.22l2.21-3.83c.15-.23.09-.52-.12-.68l-2.33-1.82z"/>
+            </svg>
+          </button>
+        </div>
+      );
+    }
+
     return (
       <div className="jira-status-compact">
-        {connection.connected ? (
-          <>
-            <span className="jira-indicator-connected" aria-hidden="true" />
-            <span className="jira-label-connected">Jira connected</span>
-          </>
-        ) : (
-          <>
-            <span className="jira-indicator-disconnected" aria-hidden="true" />
-            <span className="jira-label-disconnected">Jira not connected</span>
-          </>
-        )}
-        <button
-          ref={triggerRef}
-          type="button"
-          className="secondary"
-          onClick={openModal}
-        >
-          {connection.connected ? 'Manage' : 'Connect Jira'}
-        </button>
+        <span className="jira-indicator-disconnected" aria-hidden="true" />
+        <span className="jira-label-disconnected">Jira not connected</span>
       </div>
     );
   };
 
   // -------------------------------------------------------------------------
-  // Modal rendering
+  // Manage modal (connected state only)
   // -------------------------------------------------------------------------
 
   const renderModal = () => {
-    if (!modalOpen || load.status !== 'ready') return null;
+    if (!modalOpen || !connectedNow || load.status !== 'ready') return null;
 
     const { connection } = load;
-    const modalTitle = connection.connected ? 'Manage Jira connection' : 'Connect Jira';
+    if (!connection.connected) return null;
 
     return (
       <div className="modal-backdrop">
@@ -223,7 +246,7 @@ export default function JiraConnectionPanel({
         >
           <div className="modal-header">
             <h2 id={modalHeadingId} className="modal-title">
-              {modalTitle}
+              Manage Jira connection
             </h2>
             <button
               type="button"
@@ -237,23 +260,19 @@ export default function JiraConnectionPanel({
           </div>
 
           <div className="modal-body">
-            {connection.connected && (
-              <dl className="jira-details">
-                <div>
-                  <dt>Site URL</dt>
-                  <dd>{connection.siteUrl}</dd>
-                </div>
-                <div>
-                  <dt>Atlassian email</dt>
-                  <dd>{connection.email}</dd>
-                </div>
-              </dl>
-            )}
+            <dl className="jira-details">
+              <div>
+                <dt>Site URL</dt>
+                <dd>{connection.siteUrl}</dd>
+              </div>
+              <div>
+                <dt>Atlassian email</dt>
+                <dd>{connection.email}</dd>
+              </div>
+            </dl>
 
             <form className="jira-form" onSubmit={handleSubmit} noValidate autoComplete="off">
-              <h3>
-                {connection.connected ? 'Replace the shared connection' : 'Connect Jira Cloud'}
-              </h3>
+              <h3>Replace the shared connection</h3>
 
               <div className="field">
                 <label htmlFor={siteUrlId}>Jira Cloud site URL</label>
@@ -323,11 +342,7 @@ export default function JiraConnectionPanel({
 
               <div className="jira-form-actions">
                 <button type="submit" disabled={submitting}>
-                  {submitting
-                    ? 'Connecting…'
-                    : connection.connected
-                      ? 'Replace connection'
-                      : 'Connect Jira'}
+                  {submitting ? 'Connecting…' : 'Replace connection'}
                 </button>
                 <button
                   type="button"

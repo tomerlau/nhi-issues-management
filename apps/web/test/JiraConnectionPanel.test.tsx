@@ -1,11 +1,15 @@
 /**
- * Tests for the refactored JiraConnectionPanel — compact status bar + modal.
+ * Tests for the refactored JiraConnectionPanel — compact status bar +
+ * connected-only management modal.
  *
- * The panel shows only a compact status indicator and a trigger button on the
- * page. Connection details (site URL, email) and the tenant-sharing disclaimer
- * are inside the modal only. Modal opens via "Connect Jira" (disconnected) or
- * "Manage" (connected) button. Successful save closes the modal; failed save
- * keeps it open.
+ * Disconnected state: red indicator + "Jira not connected" text — no button.
+ * Connected state: green indicator + "Jira connected" + gear button
+ *   (aria-label="Manage Jira connection") that opens the "Manage Jira
+ *   connection" modal for replacement.
+ *
+ * The initial connection form lives in JiraInlineConnectForm (tested in
+ * App.test.tsx). This file covers the status bar, the connected manage modal,
+ * token secret handling, autofill mitigation, and change-reporting callbacks.
  */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -54,25 +58,18 @@ function fillForm(token = TOKEN) {
 async function renderDisconnected() {
   mockedGet.mockResolvedValue({ connected: false });
   render(<JiraConnectionPanel />);
-  // Wait for compact status to show, then open modal.
-  await screen.findByRole('button', { name: /^connect jira$/i });
+  await screen.findByText(/jira not connected/i);
 }
 
 async function renderConnected() {
   mockedGet.mockResolvedValue(connected);
   render(<JiraConnectionPanel />);
-  await screen.findByRole('button', { name: /^manage$/i });
-}
-
-async function openDisconnectedModal() {
-  await renderDisconnected();
-  fireEvent.click(screen.getByRole('button', { name: /^connect jira$/i }));
-  await screen.findByRole('dialog');
+  await screen.findByRole('button', { name: /manage jira connection/i });
 }
 
 async function openConnectedModal() {
   await renderConnected();
-  fireEvent.click(screen.getByRole('button', { name: /^manage$/i }));
+  fireEvent.click(screen.getByRole('button', { name: /manage jira connection/i }));
   await screen.findByRole('dialog');
 }
 
@@ -97,18 +94,31 @@ describe('compact status bar', () => {
     expect(screen.getByText(/loading jira connection/i)).toBeInTheDocument();
   });
 
-  it('shows "Jira not connected" and a "Connect Jira" trigger when disconnected', async () => {
+  it('shows "Jira not connected" with no button when disconnected', async () => {
     await renderDisconnected();
 
     expect(screen.getByText(/jira not connected/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /^connect jira$/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });
 
-  it('shows "Jira connected" and a "Manage" trigger when connected', async () => {
+  it('shows the disconnected indicator with the disconnected class', async () => {
+    await renderDisconnected();
+
+    expect(document.querySelector('.jira-indicator-disconnected')).toBeInTheDocument();
+    expect(document.querySelector('.jira-indicator-connected')).not.toBeInTheDocument();
+  });
+
+  it('shows "Jira connected" and a gear trigger button when connected', async () => {
     await renderConnected();
 
     expect(screen.getByText(/jira connected/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /^manage$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /manage jira connection/i })).toBeInTheDocument();
+  });
+
+  it('does NOT show a visible "Manage" text label on the gear button', async () => {
+    await renderConnected();
+
+    expect(screen.queryByRole('button', { name: /^manage$/i })).not.toBeInTheDocument();
   });
 
   it('does NOT show site URL or email on the page (only inside the modal)', async () => {
@@ -118,10 +128,16 @@ describe('compact status bar', () => {
     expect(screen.queryByText('alice@example.com')).not.toBeInTheDocument();
   });
 
-  it('does NOT show the sharing disclaimer on the page (only inside the modal)', async () => {
+  it('does NOT show the sharing disclaimer on the page when disconnected', async () => {
     await renderDisconnected();
 
     expect(screen.queryByText(/shared by everyone in your tenant/i)).not.toBeInTheDocument();
+  });
+
+  it('does NOT open a dialog in the disconnected state', async () => {
+    await renderDisconnected();
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
   it('shows a retryable error in the bar when status load fails', async () => {
@@ -132,7 +148,8 @@ describe('compact status bar', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /try again/i }));
 
-    expect(await screen.findByRole('button', { name: /^connect jira$/i })).toBeInTheDocument();
+    await screen.findByText(/jira not connected/i);
+    expect(screen.queryByRole('button', { name: /try again/i })).not.toBeInTheDocument();
   });
 });
 
@@ -186,25 +203,18 @@ describe('status-load failures keep distinct, safe categories', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Modal open / close
+// Modal open / close (connected state only)
 // ---------------------------------------------------------------------------
 
 describe('modal open and close', () => {
-  it('opens a dialog when "Connect Jira" is clicked (disconnected)', async () => {
-    await openDisconnectedModal();
-
-    expect(screen.getByRole('dialog')).toBeInTheDocument();
-    expect(screen.getByLabelText(/site url/i)).toBeInTheDocument();
-  });
-
-  it('opens a dialog when "Manage" is clicked (connected)', async () => {
+  it('opens a dialog when the gear button is clicked (connected)', async () => {
     await openConnectedModal();
 
     expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
 
   it('closes the dialog when the close button is clicked', async () => {
-    await openDisconnectedModal();
+    await openConnectedModal();
 
     fireEvent.click(screen.getByRole('button', { name: /^close$/i }));
 
@@ -212,7 +222,7 @@ describe('modal open and close', () => {
   });
 
   it('closes the dialog when the Cancel button is clicked', async () => {
-    await openDisconnectedModal();
+    await openConnectedModal();
 
     fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
 
@@ -220,7 +230,7 @@ describe('modal open and close', () => {
   });
 
   it('closes the dialog on Escape key when not submitting', async () => {
-    await openDisconnectedModal();
+    await openConnectedModal();
 
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
 
@@ -228,13 +238,12 @@ describe('modal open and close', () => {
   });
 
   it('keeps the dialog open while a save is in flight (Escape blocked)', async () => {
-    await openDisconnectedModal();
+    await openConnectedModal();
     mockedSave.mockReturnValue(new Promise<JiraConnected>(() => {}));
 
     fillForm();
-    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^connect jira$/i }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^replace connection$/i }));
 
-    // Escape while submitting: dialog must remain open.
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
 
     expect(screen.getByRole('dialog')).toBeInTheDocument();
@@ -246,14 +255,6 @@ describe('modal open and close', () => {
 // ---------------------------------------------------------------------------
 
 describe('modal content', () => {
-  it('shows the connection form inside the modal (disconnected)', async () => {
-    await openDisconnectedModal();
-
-    expect(screen.getByLabelText(/site url/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/account email/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/api token/i)).toBeInTheDocument();
-  });
-
   it('shows site URL and email inside the modal (connected/manage)', async () => {
     await openConnectedModal();
 
@@ -261,19 +262,21 @@ describe('modal content', () => {
     expect(screen.getByText('alice@example.com')).toBeInTheDocument();
   });
 
+  it('shows the replacement form fields inside the modal', async () => {
+    await openConnectedModal();
+
+    expect(screen.getByLabelText(/site url/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/account email/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/api token/i)).toBeInTheDocument();
+  });
+
   it('shows the tenant-sharing disclaimer inside the modal', async () => {
-    await openDisconnectedModal();
+    await openConnectedModal();
 
-    expect(screen.getByText(/shared by everyone in your tenant/i)).toBeInTheDocument();
+    expect(within(screen.getByRole('dialog')).getByText(/shared by everyone in your tenant/i)).toBeInTheDocument();
   });
 
-  it('modal title is "Connect Jira" when disconnected', async () => {
-    await openDisconnectedModal();
-
-    expect(screen.getByRole('heading', { name: /^connect jira$/i })).toBeInTheDocument();
-  });
-
-  it('modal title is "Manage Jira connection" when connected', async () => {
+  it('modal title is "Manage Jira connection"', async () => {
     await openConnectedModal();
 
     expect(screen.getByRole('heading', { name: /manage jira connection/i })).toBeInTheDocument();
@@ -285,26 +288,6 @@ describe('modal content', () => {
 // ---------------------------------------------------------------------------
 
 describe('successful submissions', () => {
-  it('connects from the disconnected state and closes the modal', async () => {
-    await openDisconnectedModal();
-    mockedSave.mockResolvedValue(connected);
-
-    fillForm();
-    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^connect jira$/i }));
-
-    // Modal closes on success.
-    await waitFor(() => {
-      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    });
-
-    expect(screen.getByText(/jira connected/i)).toBeInTheDocument();
-    expect(mockedSave).toHaveBeenCalledWith({
-      siteUrl: 'https://acme.atlassian.net',
-      email: 'alice@example.com',
-      apiToken: TOKEN,
-    });
-  });
-
   it('replaces an existing connection and closes the modal', async () => {
     await openConnectedModal();
     const replacement: JiraConnected = {
@@ -332,16 +315,15 @@ describe('successful submissions', () => {
 // ---------------------------------------------------------------------------
 
 describe('failed submissions keep modal open', () => {
-  it('keeps the modal open after a failed connection save', async () => {
-    await openDisconnectedModal();
+  it('keeps the modal open after a failed connection replacement', async () => {
+    await openConnectedModal();
     mockedSave.mockRejectedValue(new JiraApiError('credentials_rejected', 'ignored'));
 
     fillForm();
-    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^connect jira$/i }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^replace connection$/i }));
 
     await screen.findByRole('alert');
 
-    // Modal must remain open.
     expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
 
@@ -356,7 +338,6 @@ describe('failed submissions keep modal open', () => {
 
     await screen.findByRole('alert');
 
-    // Close modal and verify connected status still shows.
     fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
 
     expect(screen.getByText(/jira connected/i)).toBeInTheDocument();
@@ -369,16 +350,16 @@ describe('failed submissions keep modal open', () => {
 
 describe('client validation and duplicate submission', () => {
   it('rejects empty fields inside the modal without calling the backend', async () => {
-    await openDisconnectedModal();
+    await openConnectedModal();
 
-    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^connect jira$/i }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^replace connection$/i }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/enter the jira site url/i);
     expect(mockedSave).not.toHaveBeenCalled();
   });
 
   it('prevents duplicate submissions while a save is in flight', async () => {
-    await openDisconnectedModal();
+    await openConnectedModal();
     let resolveSave: (value: JiraConnected) => void = () => {};
     mockedSave.mockReturnValue(
       new Promise<JiraConnected>((resolve) => { resolveSave = resolve; }),
@@ -386,7 +367,7 @@ describe('client validation and duplicate submission', () => {
 
     fillForm();
     const dialog = screen.getByRole('dialog');
-    const submit = within(dialog).getByRole('button', { name: /^connect jira$/i });
+    const submit = within(dialog).getByRole('button', { name: /^replace connection$/i });
     fireEvent.click(submit);
     fireEvent.click(submit);
 
@@ -406,10 +387,10 @@ describe('client validation and duplicate submission', () => {
 
 describe('error mapping inside modal', () => {
   async function submitFailingWith(kind: ConstructorParameters<typeof JiraApiError>[0]) {
-    await openDisconnectedModal();
+    await openConnectedModal();
     mockedSave.mockRejectedValue(new JiraApiError(kind, 'ignored'));
     fillForm();
-    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^connect jira$/i }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^replace connection$/i }));
     return screen.findByRole('alert');
   }
 
@@ -439,32 +420,13 @@ describe('error mapping inside modal', () => {
 // ---------------------------------------------------------------------------
 
 describe('onConnectionSaved callback', () => {
-  it('calls onConnectionSaved after a successful connection creation', async () => {
-    mockedGet.mockResolvedValue({ connected: false });
-    const onSaved = vi.fn();
-    render(<JiraConnectionPanel onConnectionSaved={onSaved} />);
-    await screen.findByRole('button', { name: /^connect jira$/i });
-
-    fireEvent.click(screen.getByRole('button', { name: /^connect jira$/i }));
-    await screen.findByRole('dialog');
-
-    mockedSave.mockResolvedValue(connected);
-    fillForm();
-    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^connect jira$/i }));
-
-    await waitFor(() => {
-      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    });
-    expect(onSaved).toHaveBeenCalledTimes(1);
-  });
-
   it('calls onConnectionSaved after a successful connection replacement', async () => {
     mockedGet.mockResolvedValue(connected);
     const onSaved = vi.fn();
     render(<JiraConnectionPanel onConnectionSaved={onSaved} />);
-    await screen.findByRole('button', { name: /^manage$/i });
+    await screen.findByRole('button', { name: /manage jira connection/i });
 
-    fireEvent.click(screen.getByRole('button', { name: /^manage$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /manage jira connection/i }));
     await screen.findByRole('dialog');
 
     const replacement: JiraConnected = {
@@ -486,17 +448,17 @@ describe('onConnectionSaved callback', () => {
   });
 
   it('does not call onConnectionSaved after a failed save', async () => {
-    mockedGet.mockResolvedValue({ connected: false });
+    mockedGet.mockResolvedValue(connected);
     const onSaved = vi.fn();
     render(<JiraConnectionPanel onConnectionSaved={onSaved} />);
-    await screen.findByRole('button', { name: /^connect jira$/i });
+    await screen.findByRole('button', { name: /manage jira connection/i });
 
-    fireEvent.click(screen.getByRole('button', { name: /^connect jira$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /manage jira connection/i }));
     await screen.findByRole('dialog');
 
     mockedSave.mockRejectedValue(new JiraApiError('credentials_rejected', 'ignored'));
     fillForm();
-    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^connect jira$/i }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^replace connection$/i }));
 
     await screen.findByRole('alert');
     expect(onSaved).not.toHaveBeenCalled();
@@ -509,13 +471,13 @@ describe('onConnectionSaved callback', () => {
 
 describe('API token secret handling', () => {
   it('uses a password input for the token', async () => {
-    await openDisconnectedModal();
+    await openConnectedModal();
 
     expect(tokenInput()).toHaveAttribute('type', 'password');
   });
 
   it('keeps the token uncontrolled (value survives unrelated re-renders)', async () => {
-    await openDisconnectedModal();
+    await openConnectedModal();
 
     fireEvent.change(tokenInput(), { target: { value: TOKEN } });
     fillField(/account email/i, 'alice@example.com');
@@ -524,33 +486,33 @@ describe('API token secret handling', () => {
   });
 
   it('clears the token field immediately when submission starts', async () => {
-    await openDisconnectedModal();
+    await openConnectedModal();
     mockedSave.mockReturnValue(new Promise<JiraConnected>(() => {}));
 
     fillForm();
-    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^connect jira$/i }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^replace connection$/i }));
 
     expect(tokenInput().value).toBe('');
     expect(screen.getByRole('button', { name: /connecting/i })).toBeDisabled();
   });
 
   it('leaves the token cleared after a failed submission', async () => {
-    await openDisconnectedModal();
+    await openConnectedModal();
     mockedSave.mockRejectedValue(new JiraApiError('credentials_rejected', 'ignored'));
 
     fillForm();
-    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^connect jira$/i }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^replace connection$/i }));
 
     await screen.findByRole('alert');
     expect(tokenInput().value).toBe('');
   });
 
   it('never renders the token in status or error output', async () => {
-    await openDisconnectedModal();
+    await openConnectedModal();
     mockedSave.mockRejectedValue(new JiraApiError('credentials_rejected', 'ignored'));
 
     fillForm();
-    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^connect jira$/i }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^replace connection$/i }));
 
     await screen.findByRole('alert');
     expect(document.body.textContent).not.toContain(TOKEN);
@@ -563,13 +525,13 @@ describe('API token secret handling', () => {
 
 describe('autofill mitigation: Jira fields are independent of the login form', () => {
   it('marks the form with autocomplete="off"', async () => {
-    await openDisconnectedModal();
+    await openConnectedModal();
 
     expect(tokenInput().closest('form')).toHaveAttribute('autocomplete', 'off');
   });
 
   it('starts every Jira field empty', async () => {
-    await openDisconnectedModal();
+    await openConnectedModal();
 
     expect((screen.getByLabelText(/site url/i) as HTMLInputElement).value).toBe('');
     expect((screen.getByLabelText(/account email/i) as HTMLInputElement).value).toBe('');
@@ -577,13 +539,13 @@ describe('autofill mitigation: Jira fields are independent of the login form', (
   });
 
   it('gives the site URL field a Jira-specific name', async () => {
-    await openDisconnectedModal();
+    await openConnectedModal();
 
     expect(screen.getByLabelText(/site url/i)).toHaveAttribute('name', 'jiraSiteUrl');
   });
 
   it('uses a Jira-specific name and autofill-resistant attributes on the email field', async () => {
-    await openDisconnectedModal();
+    await openConnectedModal();
 
     const emailField = screen.getByLabelText(/account email/i);
     expect(emailField).toHaveAttribute('name', 'jiraAccountEmail');
@@ -595,7 +557,7 @@ describe('autofill mitigation: Jira fields are independent of the login form', (
   });
 
   it('uses a password token field with new-password autocomplete', async () => {
-    await openDisconnectedModal();
+    await openConnectedModal();
 
     expect(tokenInput()).toHaveAttribute('type', 'password');
     expect(tokenInput()).toHaveAttribute('name', 'jiraApiToken');
@@ -620,7 +582,7 @@ describe('onConnectionChange reporting', () => {
     mockedGet.mockResolvedValue({ connected: false });
     const onChange = vi.fn();
     render(<JiraConnectionPanel onConnectionChange={onChange} />);
-    await screen.findByRole('button', { name: /^connect jira$/i });
+    await screen.findByText(/jira not connected/i);
 
     expect(onChange).toHaveBeenLastCalledWith(false);
   });
@@ -629,8 +591,40 @@ describe('onConnectionChange reporting', () => {
     mockedGet.mockResolvedValue(connected);
     const onChange = vi.fn();
     render(<JiraConnectionPanel onConnectionChange={onChange} />);
-    await screen.findByRole('button', { name: /^manage$/i });
+    await screen.findByRole('button', { name: /manage jira connection/i });
 
     expect(onChange).toHaveBeenLastCalledWith(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// onLoadingChange reporting
+// ---------------------------------------------------------------------------
+
+describe('onLoadingChange reporting', () => {
+  it('reports true initially while the status request is pending', () => {
+    mockedGet.mockReturnValue(new Promise(() => {}));
+    const onLoading = vi.fn();
+    render(<JiraConnectionPanel onLoadingChange={onLoading} />);
+
+    expect(onLoading).toHaveBeenCalledWith(true);
+  });
+
+  it('reports false once status loads as disconnected', async () => {
+    mockedGet.mockResolvedValue({ connected: false });
+    const onLoading = vi.fn();
+    render(<JiraConnectionPanel onLoadingChange={onLoading} />);
+    await screen.findByText(/jira not connected/i);
+
+    expect(onLoading).toHaveBeenLastCalledWith(false);
+  });
+
+  it('reports false once status loads as connected', async () => {
+    mockedGet.mockResolvedValue(connected);
+    const onLoading = vi.fn();
+    render(<JiraConnectionPanel onLoadingChange={onLoading} />);
+    await screen.findByRole('button', { name: /manage jira connection/i });
+
+    expect(onLoading).toHaveBeenLastCalledWith(false);
   });
 });
