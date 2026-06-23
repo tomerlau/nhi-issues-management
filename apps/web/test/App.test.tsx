@@ -61,12 +61,19 @@ async function renderLoggedOut() {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.useFakeTimers({ shouldAdvanceTime: true });
+  // The shell persists the last valid project per (tenant, user) into
+  // localStorage. Clear it between tests so a value typed by one test never
+  // leaks into the initial selector state of the next test.
+  window.localStorage.clear();
   mockedGetJira.mockResolvedValue({ connected: false });
   mockedListRecentTickets.mockResolvedValue({ tickets: [] });
 });
 
 afterEach(() => {
   vi.useRealTimers();
+  // localStorage holds the per-user project preference set by AuthenticatedShell.
+  // Clear it so the next test starts with an empty preference for every user.
+  window.localStorage.clear();
   cleanup();
 });
 
@@ -1502,5 +1509,143 @@ describe('connected Jira — gear opens manage modal', () => {
     expect(document.activeElement).toBe(
       screen.getByRole('button', { name: /manage jira connection/i }),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Project preference: restore + persist (per tenant + user, localStorage)
+// ---------------------------------------------------------------------------
+
+describe('project preference — restore and persist', () => {
+  const bobAcme: SafeUser = {
+    id: 'user-acme-bob',
+    tenantId: 'tenant-acme',
+    email: 'bob@example.com',
+    displayName: 'Bob Brown',
+  };
+  const aliceGlobex: SafeUser = {
+    id: 'user-globex-alice',
+    tenantId: 'tenant-globex',
+    email: 'alice@globex.example.com',
+    displayName: 'Alice Globex',
+  };
+
+  function storageKey(user: SafeUser) {
+    return `nhi:last-project:${user.tenantId}:${user.id}`;
+  }
+
+  async function renderConnectedAs(user: SafeUser) {
+    mockedRestore.mockResolvedValue(user);
+    mockedGetJira.mockResolvedValue({
+      connected: true,
+      siteUrl: 'https://acme.atlassian.net',
+      email: user.email,
+    });
+    render(<App />);
+    await screen.findByLabelText(/jira project/i);
+  }
+
+  it('restores a saved valid project into ProjectSelector on authenticated load', async () => {
+    window.localStorage.setItem(storageKey(alice), 'SCRUM');
+    await renderConnectedAs(alice);
+
+    expect((screen.getByLabelText(/jira project/i) as HTMLInputElement).value).toBe(
+      'SCRUM',
+    );
+  });
+
+  it('automatically requests recent tickets for the restored project', async () => {
+    window.localStorage.setItem(storageKey(alice), 'SCRUM');
+    await renderConnectedAs(alice);
+
+    await act(async () => { vi.advanceTimersByTime(600); });
+
+    expect(mockedListRecentTickets).toHaveBeenCalledWith(
+      'SCRUM',
+      expect.any(AbortSignal),
+    );
+  });
+
+  it('persists a newly entered valid project in normalized uppercase form', async () => {
+    await renderConnectedAs(alice);
+
+    typeInto(/jira project/i, 'platform');
+    await act(async () => { vi.advanceTimersByTime(600); });
+
+    expect(window.localStorage.getItem(storageKey(alice))).toBe('PLATFORM');
+  });
+
+  it('does not persist partial or invalid project input', async () => {
+    window.localStorage.setItem(storageKey(alice), 'SCRUM');
+    await renderConnectedAs(alice);
+
+    typeInto(/jira project/i, 'A');
+    expect(window.localStorage.getItem(storageKey(alice))).toBe('SCRUM');
+
+    typeInto(/jira project/i, '1AB');
+    expect(window.localStorage.getItem(storageKey(alice))).toBe('SCRUM');
+  });
+
+  it('clearing the field does not erase the previously saved valid project', async () => {
+    window.localStorage.setItem(storageKey(alice), 'SCRUM');
+    await renderConnectedAs(alice);
+
+    typeInto(/jira project/i, '');
+
+    expect(window.localStorage.getItem(storageKey(alice))).toBe('SCRUM');
+  });
+
+  it('a different user in the same tenant does not inherit the previous user\'s project', async () => {
+    window.localStorage.setItem(storageKey(alice), 'SCRUM');
+    await renderConnectedAs(bobAcme);
+
+    expect((screen.getByLabelText(/jira project/i) as HTMLInputElement).value).toBe('');
+  });
+
+  it('a user in a different tenant does not inherit the previous tenant\'s project', async () => {
+    window.localStorage.setItem(storageKey(alice), 'SCRUM');
+    await renderConnectedAs(aliceGlobex);
+
+    expect((screen.getByLabelText(/jira project/i) as HTMLInputElement).value).toBe('');
+  });
+
+  it('an invalid stored value safely produces an empty selector', async () => {
+    window.localStorage.setItem(storageKey(alice), '!!!corrupt!!!');
+    await renderConnectedAs(alice);
+
+    expect((screen.getByLabelText(/jira project/i) as HTMLInputElement).value).toBe('');
+  });
+
+  it('an unavailable localStorage safely produces an empty selector', async () => {
+    const getSpy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('storage denied');
+    });
+
+    await renderConnectedAs(alice);
+
+    expect((screen.getByLabelText(/jira project/i) as HTMLInputElement).value).toBe('');
+    getSpy.mockRestore();
+  });
+
+  it('does not request tickets when there is no restored or entered project', async () => {
+    await renderConnectedAs(alice);
+
+    await act(async () => { vi.advanceTimersByTime(600); });
+
+    expect(mockedListRecentTickets).not.toHaveBeenCalled();
+  });
+
+  it('does not read or use the stored project while Jira is disconnected', async () => {
+    window.localStorage.setItem(storageKey(alice), 'SCRUM');
+    mockedRestore.mockResolvedValue(alice);
+    mockedGetJira.mockResolvedValue({ connected: false });
+    render(<App />);
+    await screen.findByLabelText(/jira cloud site url/i);
+    await act(async () => { vi.advanceTimersByTime(600); });
+
+    // While disconnected, ProjectSelector is not rendered at all and no
+    // recent-tickets request is issued from a restored value.
+    expect(screen.queryByLabelText(/jira project/i)).not.toBeInTheDocument();
+    expect(mockedListRecentTickets).not.toHaveBeenCalled();
   });
 });

@@ -161,6 +161,12 @@ button.secondary {
 .app-name {
   font-weight: 700;
   font-size: 1rem;
+  /*
+   * Visual separation from the Jira status group on the right. The header's
+   * flex `gap` already provides baseline spacing; this extra margin gives the
+   * product name a clearer breathing area before the connection indicator.
+   */
+  margin-right: 1rem;
 }
 
 .app-user {
@@ -199,7 +205,11 @@ button.secondary {
 .jira-status-compact {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  /*
+   * Keep the dot, the status label, and the gear visually grouped: a tighter
+   * gap pulls the gear closer to "Jira connected".
+   */
+  gap: 0.3rem;
   font-size: 0.875rem;
   flex-wrap: wrap;
 }
@@ -328,22 +338,31 @@ button.secondary {
   color: var(--color-text);
 }
 
+/*
+ * Readable tooltip:
+ *  - explicit width gives the content sentence-wrapping room instead of
+ *    shrinking to the inline-flex anchor's intrinsic width;
+ *  - the `min()` cap keeps the tooltip inside the viewport on narrow screens,
+ *    so it never causes horizontal scrolling;
+ *  - left:0 (no horizontal translate) anchors the tooltip's left edge to the
+ *    icon, so it always grows to the right of the icon and stays near it.
+ */
 .tooltip-text {
   position: absolute;
-  left: 50%;
+  left: 0;
   top: calc(100% + 0.4rem);
-  transform: translateX(-50%);
+  width: min(18rem, calc(100vw - 10rem));
   background: var(--color-text);
   color: var(--color-surface);
   font-size: 0.8rem;
+  line-height: 1.4;
   font-weight: 400;
-  padding: 0.35rem 0.6rem;
+  padding: 0.45rem 0.65rem;
   border-radius: 0.3rem;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: break-word;
   z-index: 10;
   pointer-events: none;
-  max-width: min(22rem, calc(100vw - 2rem));
-  white-space: normal;
 }
 
 /* --------------------------------------------------------------------------

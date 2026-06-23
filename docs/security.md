@@ -151,6 +151,13 @@ The Jira HTTP client targets only the already-validated direct
   raw Jira response. The `api_keys` table stores no plaintext key. The
   `sessions` table stores no raw token. The `user_credentials` table stores
   no plaintext password.
+- Browser `localStorage` holds only the per-`(tenantId, userId)` last-valid
+  Jira project key (`nhi:last-project:<tenantId>:<userId>`) — a non-sensitive
+  identifier, not a secret. No Jira token, email, site URL, session value,
+  ticket data, or other user-profile data is stored client-side. A missing or
+  inaccessible `localStorage` collapses safely to an empty preference; the
+  Jira-connected gate remains authoritative before any recent-tickets request
+  is issued. See `docs/architecture.md` § *Project preference*.
 
 ## Local provisioning posture
 

@@ -116,6 +116,42 @@ After creating one or more tickets:
   Jira removes it.
 - A second user in the same tenant sees the same tenant-owned list.
 
+### Remembered project, tooltip, and header spacing
+
+Confirm the UX details around the project selector and authenticated header:
+
+1. As Alice, type `SCRUM`, wait for the list to load, then refresh the page.
+   The selector restores to `SCRUM` and recent tickets reload automatically.
+2. Sign out and sign back in as Alice in the same browser. `SCRUM` restores
+   again.
+3. Sign in as Bob (same tenant) in a separate profile / private window. The
+   selector starts empty; Bob does **not** inherit Alice's `SCRUM`.
+4. Sign in as the Globex user. The selector starts empty; the project does
+   **not** leak across tenants.
+5. In DevTools, overwrite the value of
+   `nhi:last-project:tenant-acme:user-acme-alice` with garbage (e.g. `!!!`)
+   and reload. The selector starts empty and the UI is unaffected.
+6. In DevTools → Application → Local Storage, block storage (or run
+   `Object.defineProperty(window, 'localStorage', { get(){ throw new Error('blocked'); } })`)
+   then reload. The shell still renders and the selector starts empty.
+7. Hover the information icon next to "Jira project". The tooltip
+   "Enter a Jira project key to view or create tickets." appears beneath the
+   icon at a comfortable width, with normal sentence wrapping (not
+   one-word-per-line). Mouse-leave hides it.
+8. Tab to the information icon with the keyboard. The same tooltip appears.
+   Tab away (blur) hides it.
+9. Resize the viewport to ~390 px wide. The tooltip stays inside the
+   viewport (no horizontal scrollbar appears) and does not obscure the entire
+   project input.
+10. Confirm the header at desktop width visually separates `NHI Issues
+    Management` from the Jira status group, and that the settings gear sits
+    close to "Jira connected" (not far from it).
+11. At narrow viewports the header stacks vertically; product name, Jira
+    status, user email, and Sign out remain usable.
+12. In DevTools → Application → Local Storage, confirm the only application
+    key is `nhi:last-project:<tenantId>:<userId>` — no Jira credential,
+    token, site URL, session value, or ticket data is stored.
+
 ## 8. API-key provisioning, external ticket creation, and revocation
 
 ```bash

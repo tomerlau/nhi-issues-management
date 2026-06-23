@@ -150,6 +150,34 @@ A small `JiraShellState` discriminated union (`loading | error | disconnected
 shell to `connected` immediately from the POST response, and a transient
 follow-up GET failure cannot demote a confirmed connection.
 
+### Project preference (browser-local persistence)
+
+The last valid Jira project picked by the authenticated user is persisted in
+`localStorage` so the selector and recent-tickets list restore automatically
+on a later page load or sign-in.
+
+- Storage key: `nhi:last-project:<tenantId>:<userId>` — scoped by **both**
+  tenant id and user id, so a different user in the same tenant — or a user
+  in a different tenant — never inherits the previous user's project.
+- Only the normalized, client-valid Jira project key is stored. Invalid,
+  malformed, partial, or empty input is a no-op, so clearing the field or
+  typing a partial value never overwrites the previous saved value.
+- The utility lives in `apps/web/src/utils/project-preference.ts`
+  (`getProjectPreferenceStorageKey`, `loadLastProject`, `saveLastProject`).
+  Validation/normalization is delegated to the shared `project-key.ts` so the
+  rules are not duplicated.
+- A missing, blocked, or throwing `localStorage` (private mode, disabled
+  cookies/storage, SSR) collapses safely to an empty preference; the shell
+  falls back to an empty selector instead of crashing. No error is surfaced.
+- `AuthenticatedShell` initializes the selector from the preference on mount
+  and persists every newly entered valid value. The Jira-connected gate is
+  authoritative: `ProjectSelector` and `RecentTicketsPanel` are only mounted
+  in the `connected` state, so a restored value never triggers a Jira call
+  while disconnected.
+- The preference is browser-local. It does not synchronize across browsers or
+  devices, and it stores no Jira credential, token, site URL, email, session
+  data, or ticket data — only the project key, which is not a secret.
+
 ## Jira connection
 
 Tenant-wide ownership: exactly one Jira connection per tenant (`UNIQUE

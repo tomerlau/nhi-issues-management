@@ -151,6 +151,15 @@ resulting tradeoffs. Behavior already described elsewhere
   Jira omits (deleted, moved, inaccessible) and issues whose current project
   differs from the selected one are skipped; a malformed bulk response is a
   sanitized `unavailable` failure.
+- **Last-selected Jira project is remembered in browser `localStorage`.** The
+  preference is scoped by `(tenantId, userId)` and only the normalized
+  validated project key is persisted — no Jira credential, token, site URL,
+  session, or ticket data. *Production alternative*: store the preference in
+  a backend user-preferences system for cross-device consistency and
+  centralized lifecycle management. *Tradeoff*: `localStorage` avoids a new
+  API and keeps the implementation small; the preference is browser-specific
+  and does not synchronize across devices, and browser storage can be cleared
+  or unavailable, so the UI safely falls back to an empty selector.
 
 ## API-key authentication and the external REST API
 

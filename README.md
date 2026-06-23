@@ -13,21 +13,25 @@ using application-issued API keys.
   encrypted at rest.
 - Ticket creation against the tenant's shared Jira connection (fixed `Task`
   issue type) with local provenance.
-- "Recent tickets" view for a selected Jira project, with values hydrated live
-  from Jira.
+- "Recent tickets" view for a selected Jira project, with values hydrated
+  live from Jira. The last valid project picked by the authenticated user is
+  remembered in the browser and restored automatically on the next visit, so
+  recent tickets load immediately. Short-form Jira project guidance lives in
+  an accessible information tooltip on the project field (hover or keyboard
+  focus) rather than persistent helper text.
 - External REST endpoint `POST /api/v1/tickets` authenticated by an
   application-issued API key (Bearer).
 - Local CLI commands to provision and revoke API keys.
 - SQLite persistence with explicit, versioned migrations.
 
-## Quick start
+## Setup instructions
 
 Requirements: Node.js 24 (`.nvmrc`) and npm 10+.
 
 ```bash
 nvm use            # or otherwise ensure Node.js 24 is active
 npm ci
-npm run setup      # create apps/api/.env, generate the Jira key, migrate and seed
+npm run setup      # create apps/api/.env, generate the Jira encryption key, migrate and seed
 npm run dev        # start API on :3001 and web on :5173
 ```
 
@@ -51,6 +55,21 @@ hashes.
 | `tenant-acme`   | `alice@example.com`        | `acme-alice-demo`   |
 | `tenant-acme`   | `bob@example.com`          | `acme-bob-demo`     |
 | `tenant-globex` | `alice@globex.example.com` | `globex-alice-demo` |
+
+## Key assumptions and design decisions
+
+- **User lifecycle management is out of scope.** There is no user
+  registration, creation, invitation, deletion, or management through the UI
+  or REST API. Demo users are provisioned only by the seed/setup flow
+  (`npm run setup` / `npm run seed`).
+- **API-key lifecycle management is local-only.** There is no UI or REST API
+  for creating, listing, rotating, or revoking API keys. Keys are provisioned
+  and revoked only through the local CLI commands
+  (`npm run api-key:create` / `npm run api-key:revoke`).
+- **The optional NHI Blog Digest bonus is not implemented.**
+
+See [docs/assumptions.md](docs/assumptions.md) for the full list of POC
+assumptions and production alternatives.
 
 ## Main commands
 
@@ -78,21 +97,6 @@ apps/
   web/      React + Vite frontend
 docs/       Product documentation (see below)
 ```
-
-## Scope limitations
-
-- **User lifecycle management is out of scope.** There is no user
-  registration, creation, invitation, deletion, or management through the UI
-  or REST API. Demo users are provisioned only by the seed/setup flow
-  (`npm run setup` / `npm run seed`).
-- **API-key lifecycle management is local-only.** There is no UI or REST API
-  for creating, listing, rotating, or revoking API keys. Keys are provisioned
-  and revoked only through the local CLI commands
-  (`npm run api-key:create` / `npm run api-key:revoke`).
-- **The optional NHI Blog Digest bonus is not implemented.**
-
-See [docs/assumptions.md](docs/assumptions.md) for the full list of POC
-assumptions and production alternatives.
 
 ## Documentation
 
