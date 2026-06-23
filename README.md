@@ -1521,6 +1521,64 @@ a real Jira Cloud site, account email, and **unscoped** API token.
    and logout-failure behavior (stop the API, sign out → retryable error, stays
    signed in) all continue to work with the panel mounted.
 
+## API-key authentication (Milestone 12)
+
+Milestone 12 adds application-issued API keys. Keys follow the format
+`nhi_<keyId>.<secret>` where `keyId` is 16 random bytes as base64url (22 chars)
+and `secret` is 32 random bytes as base64url (43 chars). The `.` separator is not
+in the base64url alphabet, making the format unambiguous. Only the SHA-256 hash of
+the secret is stored; the plaintext is shown exactly once during provisioning.
+
+Provision and revoke keys locally using the CLI scripts:
+
+```bash
+# Provision a new API key for a user (resolved by globally unique email).
+npm run api-key:create --workspace apps/api -- --email alice@example.com
+
+# Revoke an existing key by its public key ID printed above.
+npm run api-key:revoke --workspace apps/api -- --key-id <key-id>
+```
+
+The `createRequireApiKeyAuth` middleware reads the `Authorization: Bearer <key>`
+header. All failures return the same generic 401 with `Cache-Control: no-store`
+so no information about the reason is disclosed. On success `req.auth.context` is
+populated with the same `AuthContext` shape used by session auth.
+
+No external ticket REST endpoint is added in M12. M13 will add the endpoint that
+accepts API-key-authenticated requests to create tickets from external callers.
+
+### Manual validation for M12
+
+```bash
+# 1. Run migrations and seed.
+npm run seed
+
+# 2. Provision a key for Alice (Acme tenant).
+npm run api-key:create --workspace apps/api -- --email alice@example.com
+
+# 3. Inspect the database: only public ID, hash, owner metadata, and created_at are stored.
+sqlite3 apps/api/data/app.db \
+  'SELECT id, tenant_id, user_id, substr(secret_hash,1,8)||"..." AS hash_prefix, created_at FROM api_keys;'
+
+# 4. Provision a key for a user in another tenant (Globex).
+npm run api-key:create --workspace apps/api -- --email alice@globex.example.com
+
+# 5. Revoke the first key by its public key ID (use the keyId printed in step 2).
+npm run api-key:revoke --workspace apps/api -- --key-id <key-id-from-step-2>
+
+# 6. Confirm the row was deleted.
+sqlite3 apps/api/data/app.db 'SELECT count(*) FROM api_keys WHERE id = "<key-id-from-step-2>";'
+# → 0
+
+# 7. Deleted key receives the same generic 401 (covered by automated integration tests).
+# See test/api-key-middleware.test.ts: "returns 401 for a deleted key, same response as unknown key".
+
+# 8. No plaintext keys in logs, git diff, or source control.
+git diff --check
+git status
+# Neither the full key nor the secret component should appear anywhere.
+```
+
 ## Manual validation
 
 These commands exercise the full authentication flow locally. They assume the
