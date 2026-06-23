@@ -37,8 +37,8 @@ export default function ProjectSelector({ value, onChange, disabled }: ProjectSe
         </p>
         {showError && (
           <p id={errorId} className="form-error" role="alert">
-            Enter a valid Jira project key: 2–10 characters, starting with a letter
-            and using only uppercase letters and digits.
+            Enter a valid Jira project key: 2–10 letters or digits, starting with a
+            letter. Lowercase letters are converted to uppercase.
           </p>
         )}
       </div>

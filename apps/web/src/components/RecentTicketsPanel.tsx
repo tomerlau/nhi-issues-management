@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type RefObject } from 'react';
 import {
   listRecentTickets,
   messageForReadError,
@@ -28,6 +28,11 @@ interface RecentTicketsPanelProps {
   onOpenCreationModal?: () => void;
   /** Called after successful inline ticket creation in Mode B. */
   onTicketCreated?: () => void;
+  /**
+   * Ref attached to the Mode A "Create ticket" button so the ticket-creation
+   * modal can return focus to it after closing.
+   */
+  triggerRef?: RefObject<HTMLButtonElement>;
 }
 
 const DEBOUNCE_MS = 400;
@@ -51,6 +56,7 @@ export default function RecentTicketsPanel({
   refreshKey,
   onOpenCreationModal,
   onTicketCreated,
+  triggerRef,
 }: RecentTicketsPanelProps) {
   const headingId = useId();
   const [listState, setListState] = useState<ListState>({ type: 'prompt' });
@@ -195,6 +201,7 @@ export default function RecentTicketsPanel({
         <h2 id={headingId}>Recent tickets</h2>
         <button
           type="button"
+          ref={triggerRef}
           onClick={onOpenCreationModal}
         >
           Create ticket

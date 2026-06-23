@@ -50,7 +50,6 @@ export default function JiraConnectionPanel({
   const [email, setEmail] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
 
   const tokenRef = useRef<HTMLInputElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -118,8 +117,6 @@ export default function JiraConnectionPanel({
       return;
     }
 
-    const wasConnected = load.connection.connected;
-
     setSubmitting(true);
     setFormError(null);
 
@@ -134,11 +131,6 @@ export default function JiraConnectionPanel({
         setModalOpen(false);
         setSiteUrl('');
         setEmail('');
-        setNotice(
-          wasConnected
-            ? 'Jira connection replaced. The shared connection for your tenant has been updated.'
-            : 'Jira connection created. It is now shared by everyone in your tenant.',
-        );
         onConnectionSaved?.();
         requestAnimationFrame(() => {
           triggerRef.current?.focus();
@@ -361,11 +353,6 @@ export default function JiraConnectionPanel({
   return (
     <>
       <div className="jira-connection-bar">
-        {notice && (
-          <p className="form-success" role="status">
-            {notice}
-          </p>
-        )}
         {renderStatus()}
       </div>
       {renderModal()}

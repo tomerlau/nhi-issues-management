@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, type KeyboardEvent } from 'react';
+import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
 import TicketCreationForm from './TicketCreationForm';
 
 interface TicketCreationModalProps {
@@ -6,14 +6,15 @@ interface TicketCreationModalProps {
   open: boolean;
   onClose: () => void;
   onTicketCreated: () => void;
-  triggerRef?: React.RefObject<HTMLButtonElement | null>;
+  triggerRef?: React.RefObject<HTMLButtonElement>;
 }
 
 /**
  * Modal dialog for ticket creation in Mode A (project has existing tickets).
- * Wraps TicketCreationForm in an accessible dialog. Escape closes the modal
- * when no request is pending; the close/cancel button closes it explicitly.
- * Focus returns to the trigger after close.
+ * Wraps TicketCreationForm in an accessible dialog. The close (✕) button and
+ * Escape are disabled while a request is in flight; submission state is
+ * propagated explicitly via TicketCreationForm's onSubmittingChange callback
+ * rather than inferred from the DOM. Focus returns to the trigger after close.
  *
  * The form never includes a project-key input — the projectKey comes from the
  * page-level selector and is shown as read-only context inside the form.
@@ -27,18 +28,10 @@ export default function TicketCreationModal({
 }: TicketCreationModalProps) {
   const headingId = useId();
   const modalRef = useRef<HTMLDivElement>(null);
-
-  // Track whether a form submission is in flight so Escape is blocked.
-  // TicketCreationForm owns this state internally; we detect it via an
-  // aria-busy attribute on the form to avoid prop-drilling.
-  const isSubmitting = () => {
-    const form = modalRef.current?.querySelector('form');
-    return form?.querySelector('button[disabled]') !== null;
-  };
+  const [isFormSubmitting, setIsFormSubmitting] = useState(false);
 
   useEffect(() => {
     if (open) {
-      // Focus the modal container when it opens so keyboard users can navigate it.
       requestAnimationFrame(() => {
         modalRef.current?.focus();
       });
@@ -50,13 +43,12 @@ export default function TicketCreationModal({
   }, [open, triggerRef]);
 
   const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key === 'Escape' && !isSubmitting()) {
+    if (e.key === 'Escape' && !isFormSubmitting) {
       onClose();
     }
   };
 
   const handleSuccess = (issueKey: string) => {
-    // issueKey confirmed — close modal then refresh the list.
     void issueKey;
     onClose();
     onTicketCreated();
@@ -84,13 +76,17 @@ export default function TicketCreationModal({
             className="modal-close"
             aria-label="Close"
             onClick={onClose}
-            disabled={isSubmitting()}
+            disabled={isFormSubmitting}
           >
             ✕
           </button>
         </div>
         <div className="modal-body">
-          <TicketCreationForm projectKey={projectKey} onSuccess={handleSuccess} />
+          <TicketCreationForm
+            projectKey={projectKey}
+            onSuccess={handleSuccess}
+            onSubmittingChange={setIsFormSubmitting}
+          />
         </div>
       </div>
     </div>

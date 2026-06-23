@@ -973,33 +973,40 @@ consistent, fully-validated list.
 ### TicketCreationForm component
 
 `src/components/TicketCreationForm.tsx` is a new reusable form component that
-accepts `projectKey: string` and an optional `onSuccess: (issueKey: string) =>
-void`. It exposes only `title` and `description` inputs — no project-key input —
-and shows a read-only "Creating in project `<key>`" context line. It owns the
-full ticket-creation submit lifecycle: client-side validation, the `createTicket`
-API call, success feedback (announced via `role="status"`) and field-clearing,
-and error feedback (via `role="alert"` with a distinct uncertain-outcome warning
-for non-idempotent failures). Duplicate submissions are prevented and controls
-are disabled while a request is in flight.
+accepts `projectKey: string`, an optional `onSuccess: (issueKey: string) => void`,
+and an optional `onSubmittingChange: (submitting: boolean) => void`. It exposes
+only `title` and `description` inputs — no project-key input — and shows a
+read-only "Creating in project `<key>`" context line. It owns the full
+ticket-creation submit lifecycle: client-side validation, the `createTicket` API
+call, success feedback (announced via `role="status"`) and field-clearing, and
+error feedback (via `role="alert"` with a distinct uncertain-outcome warning for
+non-idempotent failures). Duplicate submissions are prevented and controls are
+disabled while a request is in flight. `onSubmittingChange` is called with `true`
+immediately before a network request begins and with `false` after every resolved
+or rejected request, so a parent modal can disable its close controls reactively
+without inspecting the DOM.
 
 ### TicketCreationModal component
 
 `src/components/TicketCreationModal.tsx` wraps `TicketCreationForm` in an
 accessible modal. It renders `div[role="dialog" aria-modal="true"
 aria-labelledby=…]` (rather than a native `<dialog>`) with a "Create ticket" h2
-heading, a close (✕) button, and a Cancel button, and handles the Escape key.
-Escape is blocked while the form is submitting (detected by checking whether the
-form's submit button is disabled). On a successful creation it calls `onClose()`
-first, then `onTicketCreated()` to trigger a `refreshKey` increment in the shell.
-On failure the modal stays open. The `triggerRef` prop is used to return focus to
-the opening button after the modal closes.
+heading and a close (✕) button, and handles the Escape key. Escape and the close
+button are disabled while the form is submitting; submission state is received
+through `TicketCreationForm`'s `onSubmittingChange` callback into a
+`useState`-held boolean — not inferred by inspecting the DOM. On a successful
+creation it calls `onClose()` first, then `onTicketCreated()` to trigger a
+`refreshKey` increment in the shell. On failure the modal stays open. The
+`triggerRef` prop is used to return focus to the "Create ticket" button after the
+modal closes.
 
 ### RecentTicketsPanel component — Mode A and Mode B
 
 `src/components/RecentTicketsPanel.tsx` accepts `projectKey: string`,
-`refreshKey: number`, `onOpenCreationModal?: () => void`, and
-`onTicketCreated?: () => void`. Its internal state is a single discriminated
-union:
+`refreshKey: number`, `onOpenCreationModal?: () => void`,
+`onTicketCreated?: () => void`, and
+`triggerRef?: RefObject<HTMLButtonElement>`. Its internal state is a single
+discriminated union:
 
 ```
 { type: 'prompt' } | { type: 'loading' } | { type: 'success'; tickets } | { type: 'error'; kind }
@@ -1011,7 +1018,8 @@ The `loading` and `error` states render a panel div without any heading. The
 
 **Mode A** (tickets exist): renders a `<section aria-labelledby=…>` with a
 `.recent-tickets-header` flex row containing an h2 "Recent tickets" and a
-"Create ticket" button that calls `onOpenCreationModal`. Followed by
+"Create ticket" button that calls `onOpenCreationModal` and receives the
+`triggerRef` prop (so the creation modal can return focus to it on close). Followed by
 `<ol className="recent-tickets-list">` with each ticket showing the title as an
 `<a>` link (`target="_blank" rel="noopener noreferrer"`), the issue key, and a
 `<time>` element with the ISO `dateTime` attribute. No inline creation form.
@@ -1029,16 +1037,16 @@ checks in `.then`/`.catch` handlers.
 ### End-to-end flow
 
 ```
-AuthenticatedShell (projectKey, refreshKey, creationModalOpen)
+AuthenticatedShell (projectKey, refreshKey, creationModalOpen, createTicketTriggerRef)
   |-> JiraConnectionPanel (header: compact bar + modal)
   |-> ProjectSelector (page-level key input)
-  |-> RecentTicketsPanel (projectKey, refreshKey, onOpenCreationModal, onTicketCreated)
-  |     Mode A: list + "Create ticket" -> opens TicketCreationModal
+  |-> RecentTicketsPanel (projectKey, refreshKey, onOpenCreationModal, onTicketCreated, triggerRef)
+  |     Mode A: list + "Create ticket" (ref=triggerRef) -> opens TicketCreationModal
   |     Mode B: TicketCreationForm -> POST /api/tickets -> onTicketCreated -> refreshKey++
   |     Error: safe copy + Retry
   |     -> GET /api/tickets?projectKey=<key> (debounced / immediate on refresh)
-  |-> TicketCreationModal (open, onClose, onTicketCreated)
-        -> TicketCreationForm -> POST /api/tickets -> onClose + refreshKey++
+  |-> TicketCreationModal (open, onClose, onTicketCreated, triggerRef)
+        -> TicketCreationForm (onSubmittingChange) -> POST /api/tickets -> onClose + refreshKey++
 ```
 
 ## API-key authentication (Milestone 12)

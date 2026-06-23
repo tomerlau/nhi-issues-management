@@ -377,6 +377,50 @@ describe('Mode B — zero tickets', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Mode B to Mode A transition
+// ---------------------------------------------------------------------------
+
+describe('Mode B to Mode A transition', () => {
+  it('transitions from Mode B to Mode A after the first ticket is created', async () => {
+    const FIRST_TICKET: RecentTicket = {
+      issueId: '10001',
+      issueKey: 'SCRUM-1',
+      title: 'First ever ticket',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      url: 'https://acme.atlassian.net/browse/SCRUM-1',
+    };
+
+    mockedRestore.mockResolvedValue(alice);
+    mockedGetJira.mockResolvedValue({
+      connected: true,
+      siteUrl: 'https://acme.atlassian.net',
+      email: 'alice@example.com',
+    });
+    mockedListRecentTickets
+      .mockResolvedValueOnce({ tickets: [] })
+      .mockResolvedValue({ tickets: [FIRST_TICKET] });
+    mockedCreateTicket.mockResolvedValue({ issueId: '10001', issueKey: 'SCRUM-1' });
+
+    render(<App />);
+    await screen.findByLabelText(/jira project/i);
+    typeInto(/jira project/i, 'SCRUM');
+    await act(async () => { vi.advanceTimersByTime(600); });
+    await screen.findByRole('heading', { name: /create your first jira ticket/i });
+
+    typeInto(/title/i, 'First ever ticket');
+    typeInto(/description/i, 'Details here');
+    fireEvent.click(screen.getByRole('button', { name: /^create ticket$/i }));
+
+    await screen.findByRole('status');
+
+    await screen.findByRole('heading', { name: /recent tickets/i });
+    expect(screen.getByText('First ever ticket')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /create your first jira ticket/i })).not.toBeInTheDocument();
+    expect((screen.getByLabelText(/jira project/i) as HTMLInputElement).value).toBe('SCRUM');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Mode A — tickets exist
 // ---------------------------------------------------------------------------
 
@@ -433,6 +477,135 @@ describe('Mode A — tickets exist', () => {
     // Only one projectKey input total (the page-level selector).
     const projectInputs = document.querySelectorAll('input[name="projectKey"]');
     expect(projectInputs.length).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Mode A modal behaviour
+// ---------------------------------------------------------------------------
+
+describe('Mode A modal behaviour', () => {
+  const EXISTING_TICKET: RecentTicket = {
+    issueId: '10001',
+    issueKey: 'SCRUM-1',
+    title: 'Existing ticket',
+    createdAt: '2024-01-01T00:00:00.000Z',
+    url: 'https://acme.atlassian.net/browse/SCRUM-1',
+  };
+
+  const SECOND_TICKET: RecentTicket = {
+    issueId: '10002',
+    issueKey: 'SCRUM-2',
+    title: 'Second ticket',
+    createdAt: '2024-01-02T00:00:00.000Z',
+    url: 'https://acme.atlassian.net/browse/SCRUM-2',
+  };
+
+  async function renderWithModalOpen() {
+    mockedRestore.mockResolvedValue(alice);
+    mockedGetJira.mockResolvedValue({
+      connected: true,
+      siteUrl: 'https://acme.atlassian.net',
+      email: 'alice@example.com',
+    });
+    mockedListRecentTickets.mockResolvedValue({ tickets: [EXISTING_TICKET] });
+    render(<App />);
+    await screen.findByLabelText(/jira project/i);
+    typeInto(/jira project/i, 'SCRUM');
+    await act(async () => { vi.advanceTimersByTime(600); });
+    await screen.findByRole('heading', { name: /recent tickets/i });
+    fireEvent.click(screen.getByRole('button', { name: /^create ticket$/i }));
+    await screen.findByRole('dialog');
+  }
+
+  it('closes the modal, refreshes the list, and shows the new ticket on successful creation', async () => {
+    mockedRestore.mockResolvedValue(alice);
+    mockedGetJira.mockResolvedValue({
+      connected: true,
+      siteUrl: 'https://acme.atlassian.net',
+      email: 'alice@example.com',
+    });
+    mockedListRecentTickets
+      .mockResolvedValueOnce({ tickets: [EXISTING_TICKET] })
+      .mockResolvedValue({ tickets: [EXISTING_TICKET, SECOND_TICKET] });
+    mockedCreateTicket.mockResolvedValue({ issueId: SECOND_TICKET.issueId, issueKey: SECOND_TICKET.issueKey });
+
+    render(<App />);
+    await screen.findByLabelText(/jira project/i);
+    typeInto(/jira project/i, 'SCRUM');
+    await act(async () => { vi.advanceTimersByTime(600); });
+    await screen.findByRole('heading', { name: /recent tickets/i });
+    fireEvent.click(screen.getByRole('button', { name: /^create ticket$/i }));
+    await screen.findByRole('dialog');
+
+    const dialog = screen.getByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText(/title/i), { target: { value: 'Second ticket' } });
+    fireEvent.change(within(dialog).getByLabelText(/description/i), { target: { value: 'Details' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: /^create ticket$/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    await screen.findByText(SECOND_TICKET.title);
+    expect((screen.getByLabelText(/jira project/i) as HTMLInputElement).value).toBe('SCRUM');
+  });
+
+  it('keeps the modal open, preserves fields, and shows an error on a definite failure', async () => {
+    await renderWithModalOpen();
+    mockedCreateTicket.mockRejectedValue(new TicketApiError('not_connected', 'x'));
+
+    const dialog = screen.getByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText(/title/i), { target: { value: 'My ticket' } });
+    fireEvent.change(within(dialog).getByLabelText(/description/i), { target: { value: 'My description' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: /^create ticket$/i }));
+
+    await within(dialog).findByRole('alert');
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect((within(dialog).getByLabelText(/title/i) as HTMLInputElement).value).toBe('My ticket');
+    expect((within(dialog).getByLabelText(/description/i) as HTMLTextAreaElement).value).toBe('My description');
+    expect(mockedListRecentTickets).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the modal open and shows a duplicate warning on an uncertain outcome', async () => {
+    await renderWithModalOpen();
+    mockedCreateTicket.mockRejectedValue(new TicketApiError('network', 'x'));
+
+    const dialog = screen.getByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText(/title/i), { target: { value: 'My ticket' } });
+    fireEvent.change(within(dialog).getByLabelText(/description/i), { target: { value: 'My description' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: /^create ticket$/i }));
+
+    const alert = await within(dialog).findByRole('alert');
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(alert).toHaveTextContent(/duplicate/i);
+  });
+
+  it('disables the close button and blocks Escape while a submission is in flight', async () => {
+    await renderWithModalOpen();
+    mockedCreateTicket.mockReturnValue(new Promise<CreatedTicket>(() => {}));
+
+    const dialog = screen.getByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText(/title/i), { target: { value: 'My ticket' } });
+    fireEvent.change(within(dialog).getByLabelText(/description/i), { target: { value: 'Details' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: /^create ticket$/i }));
+
+    expect(within(dialog).getByRole('button', { name: /^close$/i })).toBeDisabled();
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(mockedCreateTicket).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns focus to the "Create ticket" trigger when the modal is closed', async () => {
+    await renderWithModalOpen();
+
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^close$/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    await act(async () => { vi.runAllTimers(); });
+
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: /^create ticket$/i }));
   });
 });
 

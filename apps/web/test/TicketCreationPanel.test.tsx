@@ -298,6 +298,45 @@ describe('uncertain outcomes warn about possible duplicates', () => {
   });
 });
 
+describe('onSubmittingChange callback', () => {
+  it('calls onSubmittingChange(true) immediately when submission starts', async () => {
+    const onSubmittingChange = vi.fn();
+    render(<TicketCreationForm projectKey="SCRUM" onSubmittingChange={onSubmittingChange} />);
+    mockedCreate.mockReturnValue(new Promise<CreatedTicket>(() => {}));
+
+    fillForm();
+    submit();
+
+    expect(onSubmittingChange).toHaveBeenCalledWith(true);
+    expect(onSubmittingChange).not.toHaveBeenCalledWith(false);
+  });
+
+  it('calls onSubmittingChange(false) after successful creation', async () => {
+    const onSubmittingChange = vi.fn();
+    render(<TicketCreationForm projectKey="SCRUM" onSubmittingChange={onSubmittingChange} />);
+    mockedCreate.mockResolvedValue(created);
+
+    fillForm();
+    submit();
+
+    await screen.findByRole('status');
+    expect(onSubmittingChange).toHaveBeenCalledWith(false);
+  });
+
+  it('calls onSubmittingChange(false) after a failed creation', async () => {
+    const onSubmittingChange = vi.fn();
+    render(<TicketCreationForm projectKey="SCRUM" onSubmittingChange={onSubmittingChange} />);
+    mockedCreate.mockRejectedValue(new TicketApiError('unreachable', 'x'));
+
+    fillForm();
+    submit();
+
+    await screen.findByRole('alert');
+    expect(onSubmittingChange).toHaveBeenCalledWith(true);
+    expect(onSubmittingChange).toHaveBeenCalledWith(false);
+  });
+});
+
 describe('accessibility', () => {
   it('announces validation errors through an alert region', async () => {
     render(<TicketCreationForm projectKey="SCRUM" />);

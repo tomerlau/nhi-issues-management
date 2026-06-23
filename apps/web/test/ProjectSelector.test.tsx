@@ -74,6 +74,18 @@ describe('validation error display', () => {
 
     expect(screen.getByRole('alert')).toHaveTextContent(/valid jira project key/i);
   });
+
+  it('mentions lowercase normalisation in the validation error copy', () => {
+    render(<ProjectSelector value="1AB" onChange={vi.fn()} />);
+
+    expect(screen.getByRole('alert')).toHaveTextContent(/lowercase letters are converted to uppercase/i);
+  });
+
+  it('shows no error for a lowercase key (normalised to a valid key)', () => {
+    render(<ProjectSelector value="scrum" onChange={vi.fn()} />);
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
 });
 
 describe('disabled state', () => {

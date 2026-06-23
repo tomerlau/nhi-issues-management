@@ -15,6 +15,12 @@ interface TicketCreationFormProps {
   /** Normalized, valid project key — never includes a project-key input itself. */
   projectKey: string;
   onSuccess?: (issueKey: string) => void;
+  /**
+   * Called with `true` immediately before the network request starts and with
+   * `false` after every resolved or rejected request. The parent modal uses
+   * this to disable close controls while a request is in flight.
+   */
+  onSubmittingChange?: (submitting: boolean) => void;
 }
 
 function validate(
@@ -50,7 +56,7 @@ function validate(
  * used both inside the first-ticket inline panel (Mode B) and inside the
  * creation modal (Mode A).
  */
-export default function TicketCreationForm({ projectKey, onSuccess }: TicketCreationFormProps) {
+export default function TicketCreationForm({ projectKey, onSuccess, onSubmittingChange }: TicketCreationFormProps) {
   const titleId = useId();
   const descriptionId = useId();
   const descriptionHintId = useId();
@@ -74,6 +80,7 @@ export default function TicketCreationForm({ projectKey, onSuccess }: TicketCrea
     }
 
     setSubmitting(true);
+    onSubmittingChange?.(true);
     setFeedback(null);
     setCreatedIssueKey(null);
 
@@ -83,6 +90,7 @@ export default function TicketCreationForm({ projectKey, onSuccess }: TicketCrea
         setDescription('');
         setCreatedIssueKey(ticket.issueKey);
         setSubmitting(false);
+        onSubmittingChange?.(false);
         onSuccess?.(ticket.issueKey);
       })
       .catch((error: unknown) => {
@@ -92,6 +100,7 @@ export default function TicketCreationForm({ projectKey, onSuccess }: TicketCrea
           uncertain: isUncertainTicketOutcome(kind),
         });
         setSubmitting(false);
+        onSubmittingChange?.(false);
       });
   };
 

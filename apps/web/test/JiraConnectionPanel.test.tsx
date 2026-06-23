@@ -285,7 +285,7 @@ describe('modal content', () => {
 // ---------------------------------------------------------------------------
 
 describe('successful submissions', () => {
-  it('connects from the disconnected state, closes the modal, and shows created feedback', async () => {
+  it('connects from the disconnected state and closes the modal', async () => {
     await openDisconnectedModal();
     mockedSave.mockResolvedValue(connected);
 
@@ -297,7 +297,7 @@ describe('successful submissions', () => {
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     });
 
-    expect(await screen.findByRole('status')).toHaveTextContent(/connection created/i);
+    expect(screen.getByText(/jira connected/i)).toBeInTheDocument();
     expect(mockedSave).toHaveBeenCalledWith({
       siteUrl: 'https://acme.atlassian.net',
       email: 'alice@example.com',
@@ -305,7 +305,7 @@ describe('successful submissions', () => {
     });
   });
 
-  it('replaces an existing connection, closes the modal, and shows replaced feedback', async () => {
+  it('replaces an existing connection and closes the modal', async () => {
     await openConnectedModal();
     const replacement: JiraConnected = {
       connected: true,
@@ -323,7 +323,7 @@ describe('successful submissions', () => {
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     });
 
-    expect(await screen.findByRole('status')).toHaveTextContent(/connection replaced/i);
+    expect(screen.getByText(/jira connected/i)).toBeInTheDocument();
   });
 });
 
@@ -397,7 +397,6 @@ describe('client validation and duplicate submission', () => {
     await waitFor(() => {
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     });
-    expect(await screen.findByRole('status')).toBeInTheDocument();
   });
 });
 

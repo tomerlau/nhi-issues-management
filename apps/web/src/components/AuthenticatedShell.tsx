@@ -124,6 +124,7 @@ export default function AuthenticatedShell({ user, onLoggedOut }: AuthenticatedS
                 refreshKey={refreshKey}
                 onOpenCreationModal={handleOpenCreationModal}
                 onTicketCreated={handleTicketCreated}
+                triggerRef={createTicketTriggerRef}
               />
             )}
           </>
