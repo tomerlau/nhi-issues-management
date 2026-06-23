@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from 'react';
 import { AuthError, logout, type SafeUser } from '../api/auth';
 import type { JiraConnectionStatus } from '../api/jira';
-import JiraConnectionPanel from './JiraConnectionPanel';
+import JiraConnectionPanel, { type JiraStatusUpdate } from './JiraConnectionPanel';
 import JiraInlineConnectForm from './JiraInlineConnectForm';
 import ProjectSelector from './ProjectSelector';
 import RecentTicketsPanel from './RecentTicketsPanel';
@@ -12,6 +12,12 @@ interface AuthenticatedShellProps {
   user: SafeUser;
   onLoggedOut: () => void;
 }
+
+type JiraShellState =
+  | { status: 'loading' }
+  | { status: 'error' }
+  | { status: 'disconnected' }
+  | { status: 'connected'; connection: JiraConnectionStatus };
 
 function logoutMessage(error: unknown): string {
   if (error instanceof AuthError && error.kind === 'network') {
@@ -27,23 +33,24 @@ function logoutMessage(error: unknown): string {
  * - Header: product name, Jira status bar (left of user area), user email,
  *   sign-out. User display name is not shown in the header.
  * - Main: varies by Jira connection state:
- *   - Loading: nothing extra (Jira status shows "Loading…" in header).
- *   - Disconnected: JiraInlineConnectForm (full inline connect form).
- *   - Connected: ProjectSelector → no-project prompt or RecentTicketsPanel.
+ *   - loading: nothing extra (panel shows "Loading…" in header).
+ *   - error: nothing extra (panel shows safe error + Retry in header).
+ *   - disconnected: JiraInlineConnectForm (full inline connect form).
+ *   - connected: ProjectSelector → no-project prompt or RecentTicketsPanel.
  * - TicketCreationModal: floating modal for Mode A ticket creation.
  *
- * One authoritative Jira connection state lives here: `jiraConnected`
- * (whether connected) and `jiraLoading` (whether the status is being fetched).
- * Both are reported by JiraConnectionPanel via callbacks. JiraInlineConnectForm
- * calls saveJiraConnection directly and on success increments
- * `jiraRefreshSignal`, which tells JiraConnectionPanel to re-fetch so the
- * header updates.
+ * One authoritative Jira connection state: `jiraState` (JiraShellState), driven
+ * by `JiraConnectionPanel`'s `onStatusChange` callback. The inline form is shown
+ * ONLY when the panel has confirmed `{ connected: false }` from a GET response —
+ * never on a load error. On inline form POST success, the shell immediately
+ * transitions to `connected` using the POST result, before any follow-up GET.
+ * If the follow-up GET fails, `jiraState` stays `connected` (the guard in
+ * `handleJiraStatusChange` prevents demotion by transient loading/error phases).
  */
 export default function AuthenticatedShell({ user, onLoggedOut }: AuthenticatedShellProps) {
   const [loggingOut, setLoggingOut] = useState(false);
   const [logoutError, setLogoutError] = useState<string | null>(null);
-  const [jiraConnected, setJiraConnected] = useState(false);
-  const [jiraLoading, setJiraLoading] = useState(true);
+  const [jiraState, setJiraState] = useState<JiraShellState>({ status: 'loading' });
   const [jiraRefreshSignal, setJiraRefreshSignal] = useState(0);
   const [projectKey, setProjectKey] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
@@ -52,20 +59,31 @@ export default function AuthenticatedShell({ user, onLoggedOut }: AuthenticatedS
 
   const createTicketTriggerRef = useRef<HTMLButtonElement>(null);
 
-  const handleConnectionChange = useCallback((connected: boolean) => {
-    setJiraConnected(connected);
-  }, []);
-
-  const handleJiraLoading = useCallback((loading: boolean) => {
-    setJiraLoading(loading);
+  const handleJiraStatusChange = useCallback((update: JiraStatusUpdate) => {
+    setJiraState((current) => {
+      // After a successful inline POST confirms a connection, loading and error
+      // from the follow-up GET must not demote the known connected state.
+      // A GET returning disconnected is authoritative and always accepted.
+      if (
+        current.status === 'connected' &&
+        (update.status === 'loading' || update.status === 'error')
+      ) {
+        return current;
+      }
+      return update;
+    });
   }, []);
 
   const handleConnectionSaved = useCallback(() => {
     setRefreshKey((k) => k + 1);
   }, []);
 
-  const handleInlineConnectSuccess = useCallback((_connection: JiraConnectionStatus) => {
-    // Tell the panel to re-fetch so the header reflects the new connected state.
+  const handleInlineConnectSuccess = useCallback((connection: JiraConnectionStatus) => {
+    // Immediately transition to connected using the POST result — do not wait
+    // for the follow-up GET. This ensures the inline form is removed even if
+    // the subsequent GET fails.
+    setJiraState({ status: 'connected', connection });
+    // Trigger a follow-up GET so the panel header reconciles server state.
     setJiraRefreshSignal((s) => s + 1);
   }, []);
 
@@ -107,9 +125,8 @@ export default function AuthenticatedShell({ user, onLoggedOut }: AuthenticatedS
         <span className="app-name">NHI Issues Management</span>
         <div className="app-header-right">
           <JiraConnectionPanel
-            onConnectionChange={handleConnectionChange}
+            onStatusChange={handleJiraStatusChange}
             onConnectionSaved={handleConnectionSaved}
-            onLoadingChange={handleJiraLoading}
             externalRefreshSignal={jiraRefreshSignal}
           />
           <div className="app-user">
@@ -130,11 +147,11 @@ export default function AuthenticatedShell({ user, onLoggedOut }: AuthenticatedS
           </p>
         )}
 
-        {!jiraConnected && !jiraLoading && (
+        {jiraState.status === 'disconnected' && (
           <JiraInlineConnectForm onSuccess={handleInlineConnectSuccess} />
         )}
 
-        {jiraConnected && (
+        {jiraState.status === 'connected' && (
           <>
             <ProjectSelector
               value={projectKey}
@@ -160,7 +177,7 @@ export default function AuthenticatedShell({ user, onLoggedOut }: AuthenticatedS
         )}
       </main>
 
-      {jiraConnected && hasValidProject && (
+      {jiraState.status === 'connected' && hasValidProject && (
         <TicketCreationModal
           projectKey={normalizedKey}
           open={creationModalOpen}

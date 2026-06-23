@@ -56,6 +56,7 @@ export default function JiraInlineConnectForm({ onSuccess }: JiraInlineConnectFo
 
     saveJiraConnection({ siteUrl, email, apiToken })
       .then((connection) => {
+        setSubmitting(false);
         onSuccess?.(connection);
       })
       .catch((error: unknown) => {

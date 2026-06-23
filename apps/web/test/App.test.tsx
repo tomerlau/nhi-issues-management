@@ -1267,6 +1267,129 @@ describe('disconnected Jira — inline connection form', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Jira status resilience — GET errors vs. explicit disconnected
+// ---------------------------------------------------------------------------
+
+describe('Jira status resilience', () => {
+  it('does NOT show the inline form when the initial status GET fails', async () => {
+    mockedRestore.mockResolvedValue(alice);
+    mockedGetJira.mockRejectedValue(new JiraApiError('network', 'x'));
+
+    render(<App />);
+    // Panel shows a safe error with Retry — this is not an explicit disconnected state.
+    await screen.findByRole('button', { name: /try again/i });
+
+    expect(screen.queryByLabelText(/jira cloud site url/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^connect jira$/i })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/jira project/i)).not.toBeInTheDocument();
+  });
+
+  it('shows the inline form only after Retry returns an explicit disconnected response', async () => {
+    mockedRestore.mockResolvedValue(alice);
+    mockedGetJira
+      .mockRejectedValueOnce(new JiraApiError('network', 'x'))
+      .mockResolvedValueOnce({ connected: false });
+
+    render(<App />);
+    await screen.findByRole('button', { name: /try again/i });
+
+    // Before retry: error state → inline form must not appear.
+    expect(screen.queryByLabelText(/jira cloud site url/i)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /try again/i }));
+
+    // After retry resolves as disconnected: inline form appears.
+    await screen.findByLabelText(/jira cloud site url/i);
+    expect(screen.queryByLabelText(/jira project/i)).not.toBeInTheDocument();
+  });
+
+  it('shows gear and ProjectSelector (no inline form) when Retry returns connected', async () => {
+    mockedRestore.mockResolvedValue(alice);
+    mockedGetJira
+      .mockRejectedValueOnce(new JiraApiError('network', 'x'))
+      .mockResolvedValueOnce({
+        connected: true,
+        siteUrl: 'https://acme.atlassian.net',
+        email: 'alice@example.com',
+      });
+
+    render(<App />);
+    await screen.findByRole('button', { name: /try again/i });
+
+    expect(screen.queryByLabelText(/jira cloud site url/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/jira project/i)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /try again/i }));
+
+    await screen.findByRole('button', { name: /manage jira connection/i });
+    await screen.findByLabelText(/jira project/i);
+    expect(screen.queryByLabelText(/jira cloud site url/i)).not.toBeInTheDocument();
+  });
+
+  it('removes the inline form immediately on POST success, before the follow-up GET resolves', async () => {
+    mockedRestore.mockResolvedValue(alice);
+    mockedGetJira
+      .mockResolvedValueOnce({ connected: false })
+      .mockReturnValue(new Promise(() => {})); // follow-up GET never resolves
+    mockedSaveJira.mockResolvedValue({
+      connected: true,
+      siteUrl: 'https://acme.atlassian.net',
+      email: 'alice@example.com',
+    });
+
+    render(<App />);
+    await screen.findByLabelText(/jira cloud site url/i);
+
+    fireEvent.change(screen.getByLabelText(/jira cloud site url/i), { target: { value: 'https://acme.atlassian.net' } });
+    fireEvent.change(screen.getByLabelText(/atlassian account email/i), { target: { value: 'alice@example.com' } });
+    fireEvent.change(screen.getByLabelText(/atlassian api token/i), { target: { value: 'tok' } });
+    fireEvent.click(screen.getByRole('button', { name: /^connect jira$/i }));
+
+    // Form gone and ProjectSelector visible — even while the follow-up GET is still pending.
+    await waitFor(() => {
+      expect(screen.queryByLabelText(/jira cloud site url/i)).not.toBeInTheDocument();
+    });
+    await screen.findByLabelText(/jira project/i);
+    expect(mockedSaveJira).toHaveBeenCalledTimes(1);
+  });
+
+  it('stays connected when the follow-up GET after inline POST fails', async () => {
+    mockedRestore.mockResolvedValue(alice);
+    mockedGetJira
+      .mockResolvedValueOnce({ connected: false })
+      .mockRejectedValue(new JiraApiError('network', 'x')); // follow-up GET fails
+    mockedSaveJira.mockResolvedValue({
+      connected: true,
+      siteUrl: 'https://acme.atlassian.net',
+      email: 'alice@example.com',
+    });
+
+    render(<App />);
+    await screen.findByLabelText(/jira cloud site url/i);
+
+    fireEvent.change(screen.getByLabelText(/jira cloud site url/i), { target: { value: 'https://acme.atlassian.net' } });
+    fireEvent.change(screen.getByLabelText(/atlassian account email/i), { target: { value: 'alice@example.com' } });
+    fireEvent.change(screen.getByLabelText(/atlassian api token/i), { target: { value: 'tok' } });
+    fireEvent.click(screen.getByRole('button', { name: /^connect jira$/i }));
+
+    // POST succeeded: form gone and ProjectSelector visible.
+    await waitFor(() => {
+      expect(screen.queryByLabelText(/jira cloud site url/i)).not.toBeInTheDocument();
+    });
+    await screen.findByLabelText(/jira project/i);
+
+    // Wait long enough for the follow-up GET failure to propagate.
+    await waitFor(() => {
+      // ProjectSelector must still be visible (shell stayed connected, did not revert).
+      expect(screen.getByLabelText(/jira project/i)).toBeInTheDocument();
+      // Inline form must remain absent — error is not treated as disconnected.
+      expect(screen.queryByLabelText(/jira cloud site url/i)).not.toBeInTheDocument();
+    });
+    expect(mockedSaveJira).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Connected Jira — gear opens manage modal
 // ---------------------------------------------------------------------------
 

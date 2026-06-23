@@ -249,16 +249,19 @@ Implemented:
   modal for replacing the existing connection. The modal closes on success,
   stays open on failure, and blocks Escape while a save is in flight. The
   API-token secret-handling rules (uncontrolled input, cleared immediately on
-  submit, never in React state) are preserved unchanged. Two new props:
-  `onLoadingChange` (reported during status fetch) and `externalRefreshSignal`
-  (incremented by the shell to trigger an immediate re-fetch).
+  submit, never in React state) are preserved unchanged. Exports a
+  `JiraStatusUpdate` discriminated union (`loading | error | disconnected |
+  connected`) and reports it via a single `onStatusChange` callback; the old
+  `onConnectionChange` / `onLoadingChange` booleans are replaced by this richer
+  type so callers can distinguish a load error from an explicit disconnected
+  response.
 - **`JiraInlineConnectForm` (new)**
   (`apps/web/src/components/JiraInlineConnectForm.tsx`). Rendered in the main
-  content area when the tenant has no Jira connection and loading is complete.
-  Provides the initial connection form (Jira Cloud site URL, Atlassian email,
-  API token, tenant-sharing disclaimer) and calls `onSuccess` on a successful
-  save, which triggers `jiraRefreshSignal` to increment and `JiraConnectionPanel`
-  to re-fetch.
+  content area only when the panel has confirmed `{ connected: false }` — never
+  on a load error. Provides the initial connection form (Jira Cloud site URL,
+  Atlassian email, API token, tenant-sharing disclaimer). On successful POST it
+  resets `submitting` and calls `onSuccess(connection)`, which transitions the
+  shell to connected immediately using the POST result.
 - **Two distinct content modes for `RecentTicketsPanel`**
   (`apps/web/src/components/RecentTicketsPanel.tsx`):
   - **Mode A** (success, tickets exist): renders a `<section>` with a "Recent
@@ -292,17 +295,17 @@ Implemented:
   the modal and calls `onTicketCreated` to trigger a refresh. Focus returns to the
   "Create ticket" trigger button after the modal closes.
 - **`AuthenticatedShell` updated** to own `projectKey`, `refreshKey`,
-  `creationModalOpen`, `ticketCreationSubmitting`, `jiraLoading` (starts
-  `true`), and `jiraRefreshSignal` state. The header now shows: product name,
-  Jira status bar, user email, and sign-out — the user display name is no
-  longer rendered. When Jira is disconnected and not loading,
-  `JiraInlineConnectForm` is rendered in the main content area. When Jira is
-  connected, it renders: `ProjectSelector` → a no-project prompt or
-  `RecentTicketsPanel` → and `TicketCreationModal`. A `createTicketTriggerRef`
-  is passed to both `RecentTicketsPanel` and `TicketCreationModal`. `ProjectSelector`
-  is disabled while `creationModalOpen || ticketCreationSubmitting`. Both
-  `RecentTicketsPanel` and `TicketCreationModal` receive `onSubmittingChange` so
-  either form can report submission state upward.
+  `creationModalOpen`, `ticketCreationSubmitting`, `jiraRefreshSignal`, and a
+  `JiraShellState` union (`loading | error | disconnected | connected`).
+  `JiraConnectionPanel`'s `onStatusChange` drives transitions; a successful
+  inline POST immediately sets the shell to `connected` using the POST result,
+  and if the follow-up GET fails, the shell stays `connected` (loading and error
+  updates cannot demote a confirmed connection). `JiraInlineConnectForm` is only
+  shown in the `disconnected` state. The header shows: product name, Jira status
+  bar, user email, and sign-out — the user display name is not rendered. When
+  connected: `ProjectSelector` → no-project prompt or `RecentTicketsPanel` →
+  `TicketCreationModal`. `ProjectSelector` is disabled while
+  `creationModalOpen || ticketCreationSubmitting`.
 - **Debounced project-key changes, immediate abort, stale-response prevention,
   and refresh-key triggers** — all unchanged from the prior milestone:
   400 ms debounce, immediate abort of in-flight requests on key change,
@@ -318,19 +321,19 @@ Implemented:
   error rules including lowercase normalisation copy, disabled state),
   `RecentTicketsPanel` (42 tests: prompt/loading/error states, Mode A and Mode B
   rendering, onOpenCreationModal and onTicketCreated callbacks, Mode B → Mode A
-  transition, stale-response prevention), `JiraConnectionPanel` (50 tests:
-  compact-bar states including disconnected-only-dot and connected-only-gear,
-  modal open/close, Escape blocking, form fields inside modal, successful/failed
-  saves, validation, duplicate-submit prevention, error-category mapping, token
-  secret handling, autofill mitigation, onConnectionSaved, onConnectionChange,
-  and onLoadingChange callbacks), `TicketCreationForm` (29 tests: form fields,
-  no project-key input, project context display, validation, API call, error
-  mapping, uncertain outcomes, onSubmittingChange callback), and `App.test.tsx`
-  integration suite (71 tests including header content (no display name, email,
-  sign-out, Jira status), disconnected Jira inline connection form, compact Jira
-  bar, Mode A and Mode B, Mode B-to-Mode A transition, Mode A modal behaviour —
-  success, failure, uncertain outcome, pending blocking, focus restoration —
-  project selector locking for Mode A and Mode B, and creation flow).
+  transition, stale-response prevention), `JiraConnectionPanel` (48 tests:
+  compact-bar states, modal open/close, Escape blocking, form fields inside modal,
+  successful/failed saves, validation, duplicate-submit prevention, error-category
+  mapping, token secret handling, autofill mitigation, onConnectionSaved callback,
+  onStatusChange callback — loading/disconnected/connected/error), `TicketCreationForm`
+  (29 tests: form fields, no project-key input, project context display, validation,
+  API call, error mapping, uncertain outcomes, onSubmittingChange callback), and
+  `App.test.tsx` integration suite (76 tests including header content, disconnected
+  Jira inline form, Jira status resilience (GET error vs. disconnected, Retry
+  behaviors, POST-first immediate transition, POST+GET-failure resilience), compact
+  Jira bar, Mode A and Mode B, Mode B-to-Mode A transition, Mode A modal behaviour —
+  success, failure, uncertain outcome, pending blocking, focus restoration — project
+  selector locking for Mode A and Mode B, and creation flow).
 
 Explicitly **not** implemented in Milestone 11: any backend changes; pagination,
 search, or filtering beyond a single `projectKey`; inline creation-to-list

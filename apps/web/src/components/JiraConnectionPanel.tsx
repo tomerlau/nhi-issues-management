@@ -21,11 +21,15 @@ type LoadState =
   | { status: 'error'; kind: JiraErrorKind }
   | { status: 'ready'; connection: JiraConnectionStatus };
 
+export type JiraStatusUpdate =
+  | { status: 'loading' }
+  | { status: 'error' }
+  | { status: 'disconnected' }
+  | { status: 'connected'; connection: JiraConnectionStatus };
+
 interface JiraConnectionPanelProps {
-  onConnectionChange?: (connected: boolean) => void;
+  onStatusChange?: (update: JiraStatusUpdate) => void;
   onConnectionSaved?: () => void;
-  /** Called with `true` while fetching status, `false` when ready or errored. */
-  onLoadingChange?: (loading: boolean) => void;
   /** Increment to trigger an immediate re-fetch of the connection status. */
   externalRefreshSignal?: number;
 }
@@ -41,9 +45,8 @@ interface JiraConnectionPanelProps {
  * not inside this component.
  */
 export default function JiraConnectionPanel({
-  onConnectionChange,
+  onStatusChange,
   onConnectionSaved,
-  onLoadingChange,
   externalRefreshSignal,
 }: JiraConnectionPanelProps) {
   const modalHeadingId = useId();
@@ -86,13 +89,17 @@ export default function JiraConnectionPanel({
 
   const connectedNow = load.status === 'ready' && load.connection.connected;
   useEffect(() => {
-    onConnectionChange?.(connectedNow);
-  }, [connectedNow, onConnectionChange]);
-
-  const isLoading = load.status === 'loading';
-  useEffect(() => {
-    onLoadingChange?.(isLoading);
-  }, [isLoading, onLoadingChange]);
+    if (!onStatusChange) return;
+    if (load.status === 'loading') {
+      onStatusChange({ status: 'loading' });
+    } else if (load.status === 'error') {
+      onStatusChange({ status: 'error' });
+    } else if (load.connection.connected) {
+      onStatusChange({ status: 'connected', connection: load.connection });
+    } else {
+      onStatusChange({ status: 'disconnected' });
+    }
+  }, [load, onStatusChange]);
 
   useEffect(() => {
     if (!externalRefreshSignal) return;

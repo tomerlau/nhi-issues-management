@@ -566,65 +566,42 @@ describe('autofill mitigation: Jira fields are independent of the login form', (
 });
 
 // ---------------------------------------------------------------------------
-// onConnectionChange reporting
+// onStatusChange reporting
 // ---------------------------------------------------------------------------
 
-describe('onConnectionChange reporting', () => {
-  it('reports false while loading', () => {
+describe('onStatusChange reporting', () => {
+  it('reports { status: "loading" } while the status request is pending', () => {
     mockedGet.mockReturnValue(new Promise(() => {}));
-    const onChange = vi.fn();
-    render(<JiraConnectionPanel onConnectionChange={onChange} />);
+    const onStatus = vi.fn();
+    render(<JiraConnectionPanel onStatusChange={onStatus} />);
 
-    expect(onChange).toHaveBeenCalledWith(false);
+    expect(onStatus).toHaveBeenCalledWith({ status: 'loading' });
   });
 
-  it('reports false when disconnected', async () => {
+  it('reports { status: "disconnected" } when GET returns disconnected', async () => {
     mockedGet.mockResolvedValue({ connected: false });
-    const onChange = vi.fn();
-    render(<JiraConnectionPanel onConnectionChange={onChange} />);
+    const onStatus = vi.fn();
+    render(<JiraConnectionPanel onStatusChange={onStatus} />);
     await screen.findByText(/jira not connected/i);
 
-    expect(onChange).toHaveBeenLastCalledWith(false);
+    expect(onStatus).toHaveBeenLastCalledWith({ status: 'disconnected' });
   });
 
-  it('reports true when connected', async () => {
+  it('reports { status: "connected", connection } when GET returns connected', async () => {
     mockedGet.mockResolvedValue(connected);
-    const onChange = vi.fn();
-    render(<JiraConnectionPanel onConnectionChange={onChange} />);
+    const onStatus = vi.fn();
+    render(<JiraConnectionPanel onStatusChange={onStatus} />);
     await screen.findByRole('button', { name: /manage jira connection/i });
 
-    expect(onChange).toHaveBeenLastCalledWith(true);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// onLoadingChange reporting
-// ---------------------------------------------------------------------------
-
-describe('onLoadingChange reporting', () => {
-  it('reports true initially while the status request is pending', () => {
-    mockedGet.mockReturnValue(new Promise(() => {}));
-    const onLoading = vi.fn();
-    render(<JiraConnectionPanel onLoadingChange={onLoading} />);
-
-    expect(onLoading).toHaveBeenCalledWith(true);
+    expect(onStatus).toHaveBeenLastCalledWith({ status: 'connected', connection: connected });
   });
 
-  it('reports false once status loads as disconnected', async () => {
-    mockedGet.mockResolvedValue({ connected: false });
-    const onLoading = vi.fn();
-    render(<JiraConnectionPanel onLoadingChange={onLoading} />);
-    await screen.findByText(/jira not connected/i);
+  it('reports { status: "error" } when the GET fails', async () => {
+    mockedGet.mockRejectedValue(new JiraApiError('network', 'x'));
+    const onStatus = vi.fn();
+    render(<JiraConnectionPanel onStatusChange={onStatus} />);
+    await screen.findByRole('alert');
 
-    expect(onLoading).toHaveBeenLastCalledWith(false);
-  });
-
-  it('reports false once status loads as connected', async () => {
-    mockedGet.mockResolvedValue(connected);
-    const onLoading = vi.fn();
-    render(<JiraConnectionPanel onLoadingChange={onLoading} />);
-    await screen.findByRole('button', { name: /manage jira connection/i });
-
-    expect(onLoading).toHaveBeenLastCalledWith(false);
+    expect(onStatus).toHaveBeenLastCalledWith({ status: 'error' });
   });
 });

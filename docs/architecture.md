@@ -157,10 +157,13 @@ gear-icon-only button (`aria-label="Manage Jira connection"`) that opens a
 tenant-sharing disclaimer, and the replace form live exclusively inside that
 accessible modal (`div[role="dialog" aria-modal="true"]`) that opens on demand
 and closes on a successful save. A failed save keeps the modal open; Escape is
-blocked while a save is in flight. The panel exposes two additional props:
-`onLoadingChange` (called with `true`/`false` as the status-fetch state changes)
-and `externalRefreshSignal` (incremented by the shell to trigger an immediate
-re-fetch after the inline form succeeds).
+blocked while a save is in flight. The panel exports a `JiraStatusUpdate`
+discriminated union (`loading | error | disconnected | connected`) and fires it
+via a single `onStatusChange` callback whenever its internal `LoadState` changes.
+This replaces the old boolean `onConnectionChange` / `onLoadingChange` pair and
+allows the shell to distinguish a load error from an explicit disconnected
+response. The `externalRefreshSignal` prop (an integer incremented by the shell)
+still triggers an immediate re-fetch of the connection status.
 
 Regardless of modal or bar, the component owns a small load state (`loading` →
 `ready` / `error`) plus the safe connection status. The load-error state retains
@@ -175,16 +178,17 @@ encrypted data, or credential material.
 ### Initial Jira connection inline form
 
 `src/components/JiraInlineConnectForm.tsx` is a new component rendered in the
-main content area when the tenant has no Jira connection and `JiraConnectionPanel`
-has finished loading (`jiraLoading` is `false`). It provides the initial
-connection form (Jira Cloud site URL, Atlassian account email, API token, and
-tenant-sharing disclaimer) and calls `onSuccess(connection)` on a successful
-save. `AuthenticatedShell` handles `onSuccess` by incrementing `jiraRefreshSignal`,
-which triggers `JiraConnectionPanel` to immediately re-fetch the connection status
-and transition to the connected state, which in turn fires `onConnectionChange(true)`
-and reveals the project selector and ticket panels. The same API-token
-secret-handling rules apply: the token input is uncontrolled, cleared immediately
-on submit before the request begins, and never placed in React state.
+main content area only when the panel has confirmed `{ connected: false }` from
+a GET response (shell state `disconnected`). A load error never shows the form;
+the panel displays a safe error with Retry instead. The form provides the initial
+connection (Jira Cloud site URL, Atlassian account email, API token, tenant-sharing
+disclaimer). On a successful POST it resets its `submitting` state and calls
+`onSuccess(connection)`. `AuthenticatedShell` handles `onSuccess` by immediately
+setting `jiraState = { status: 'connected', connection }` from the POST result —
+before any follow-up GET — and incrementing `jiraRefreshSignal` to trigger
+reconciliation. The same API-token secret-handling rules apply: the token input
+is uncontrolled, cleared immediately on submit before the request begins, and
+never placed in React state.
 
 ### Why the API token is never held in client state
 
@@ -934,12 +938,38 @@ inside any form element; it is wired directly into `AuthenticatedShell` via an
 
 `AuthenticatedShell` owns six pieces of state: the raw `projectKey` string, an
 integer `refreshKey`, a boolean `creationModalOpen`, a boolean
-`ticketCreationSubmitting`, a boolean `jiraLoading` (starts `true`), and an
-integer `jiraRefreshSignal`. The header shows: product name, Jira status bar,
-user email, and sign-out — the user display name is not rendered. When Jira is
-disconnected and not loading (`!jiraConnected && !jiraLoading`), the main area
-shows `JiraInlineConnectForm` instead of the project selector and ticket panels.
-When the tenant is Jira-connected the shell renders:
+`ticketCreationSubmitting`, a `JiraShellState` union `jiraState` (starts
+`{ status: 'loading' }`), and an integer `jiraRefreshSignal`. The header shows:
+product name, Jira status bar, user email, and sign-out — the user display name
+is not rendered.
+
+`JiraShellState` is a discriminated union with four members:
+
+```ts
+type JiraShellState =
+  | { status: 'loading' }
+  | { status: 'error' }
+  | { status: 'disconnected' }
+  | { status: 'connected'; connection: JiraConnectionStatus };
+```
+
+`JiraConnectionPanel` fires its `onStatusChange` callback with a matching
+`JiraStatusUpdate` union whenever the panel's load state changes. The shell's
+`handleJiraStatusChange` applies one guard before accepting the update: if the
+current state is `connected`, incoming `loading` or `error` updates are ignored
+so that a transient follow-up GET failure cannot demote a confirmed connection.
+A `disconnected` update from the panel is always authoritative and accepted even
+from `connected`.
+
+`JiraInlineConnectForm` is rendered **only** when `jiraState.status ===
+'disconnected'` — never during `loading` or `error`. When its POST succeeds,
+`handleInlineConnectSuccess` immediately calls `setJiraState({ status:
+'connected', connection })` using the POST response body, then increments
+`jiraRefreshSignal` to trigger a follow-up GET. The inline form is therefore
+removed from the DOM as soon as the POST resolves, regardless of whether the
+follow-up GET succeeds.
+
+When `jiraState.status === 'connected'` the shell renders:
 
 1. `JiraConnectionPanel` in the header.
 2. `ProjectSelector` in the main area, **disabled** while
@@ -956,8 +986,8 @@ Both `RecentTicketsPanel` and `TicketCreationModal` receive an
 can report submission state upward to `AuthenticatedShell`, which toggles
 `ticketCreationSubmitting` in response.
 
-`handleConnectionChange` is wrapped in `useCallback` because `JiraConnectionPanel`
-lists `onConnectionChange` in its effect dependency array — an unstable reference
+`handleJiraStatusChange` is wrapped in `useCallback` because `JiraConnectionPanel`
+lists `onStatusChange` in its effect dependency array — an unstable reference
 would cause that effect to re-run on every shell render. The other shell callbacks
 (`handleTicketCreated`, `handleConnectionSaved`, `handleOpenCreationModal`,
 `handleCloseCreationModal`, `handleTicketCreationSubmittingChange`) use
@@ -1073,9 +1103,9 @@ checks in `.then`/`.catch` handlers.
 ### End-to-end flow
 
 ```
-AuthenticatedShell (projectKey, refreshKey, creationModalOpen, ticketCreationSubmitting, jiraLoading, jiraRefreshSignal, createTicketTriggerRef)
-  |-> JiraConnectionPanel (header: red/green dot; gear button when connected; onLoadingChange; externalRefreshSignal)
-  |-> [disconnected + not loading] JiraInlineConnectForm -> POST /api/jira/connection -> jiraRefreshSignal++ -> re-fetch
+AuthenticatedShell (projectKey, refreshKey, creationModalOpen, ticketCreationSubmitting, jiraState, jiraRefreshSignal, createTicketTriggerRef)
+  |-> JiraConnectionPanel (header: red/green dot; gear button when connected; onStatusChange; externalRefreshSignal)
+  |-> [disconnected] JiraInlineConnectForm -> POST /api/jira/connection -> setJiraState(connected) + jiraRefreshSignal++ -> re-fetch
   |-> [connected] ProjectSelector (disabled while creationModalOpen || ticketCreationSubmitting)
   |-> [connected] RecentTicketsPanel (projectKey, refreshKey, onOpenCreationModal, onTicketCreated, triggerRef, onSubmittingChange)
   |     Mode A: list + "Create ticket" (ref=triggerRef) -> opens TicketCreationModal
