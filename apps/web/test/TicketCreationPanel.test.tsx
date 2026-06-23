@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useState } from 'react';
 import TicketCreationPanel from '../src/components/TicketCreationPanel';
 import { createTicket, TicketApiError, type CreatedTicket } from '../src/api/tickets';
 
@@ -14,6 +15,27 @@ vi.mock('../src/api/tickets', async () => {
 const mockedCreate = vi.mocked(createTicket);
 
 const created: CreatedTicket = { issueId: '10005', issueKey: 'SCRUM-6' };
+
+/**
+ * Stateful wrapper so the controlled project-key input in TicketCreationPanel
+ * behaves correctly in tests: state changes propagate back through the prop.
+ */
+function Wrapper({
+  initialProjectKey = '',
+  onTicketCreated,
+}: {
+  initialProjectKey?: string;
+  onTicketCreated?: () => void;
+}) {
+  const [projectKey, setProjectKey] = useState(initialProjectKey);
+  return (
+    <TicketCreationPanel
+      projectKey={projectKey}
+      onProjectKeyChange={setProjectKey}
+      onTicketCreated={onTicketCreated}
+    />
+  );
+}
 
 function fill(label: RegExp, value: string) {
   fireEvent.change(screen.getByLabelText(label), { target: { value } });
@@ -39,7 +61,7 @@ afterEach(() => {
 
 describe('rendering', () => {
   it('renders the project key, title, and description inputs with a create button', () => {
-    render(<TicketCreationPanel />);
+    render(<Wrapper />);
 
     expect(screen.getByLabelText(/project key/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/title/i)).toBeInTheDocument();
@@ -50,7 +72,7 @@ describe('rendering', () => {
 
 describe('client validation', () => {
   it('rejects empty fields without calling the backend', async () => {
-    render(<TicketCreationPanel />);
+    render(<Wrapper />);
 
     submit();
 
@@ -59,7 +81,7 @@ describe('client validation', () => {
   });
 
   it('rejects a syntactically invalid project key without calling the backend', async () => {
-    render(<TicketCreationPanel />);
+    render(<Wrapper />);
 
     fillForm({ projectKey: '1AB' });
     submit();
@@ -69,7 +91,7 @@ describe('client validation', () => {
   });
 
   it('rejects a too-short project key without calling the backend', async () => {
-    render(<TicketCreationPanel />);
+    render(<Wrapper />);
 
     fillForm({ projectKey: 'A' });
     submit();
@@ -79,7 +101,7 @@ describe('client validation', () => {
   });
 
   it('rejects a missing title without calling the backend', async () => {
-    render(<TicketCreationPanel />);
+    render(<Wrapper />);
 
     fillForm({ title: '   ' });
     submit();
@@ -89,7 +111,7 @@ describe('client validation', () => {
   });
 
   it('rejects an over-long title without calling the backend', async () => {
-    render(<TicketCreationPanel />);
+    render(<Wrapper />);
 
     fillForm({ title: 'x'.repeat(256) });
     submit();
@@ -99,7 +121,7 @@ describe('client validation', () => {
   });
 
   it('rejects a missing description without calling the backend', async () => {
-    render(<TicketCreationPanel />);
+    render(<Wrapper />);
 
     fillForm({ description: '   ' });
     submit();
@@ -109,7 +131,7 @@ describe('client validation', () => {
   });
 
   it('rejects an over-long description without calling the backend', async () => {
-    render(<TicketCreationPanel />);
+    render(<Wrapper />);
 
     fillForm({ description: 'x'.repeat(5001) });
     submit();
@@ -121,7 +143,7 @@ describe('client validation', () => {
 
 describe('request payload', () => {
   it('normalizes the project key to uppercase and sends the trimmed payload', async () => {
-    render(<TicketCreationPanel />);
+    render(<Wrapper />);
     mockedCreate.mockResolvedValue(created);
 
     fill(/project key/i, 'scrum');
@@ -138,7 +160,7 @@ describe('request payload', () => {
   });
 
   it('preserves the entered casing in the input while typing', () => {
-    render(<TicketCreationPanel />);
+    render(<Wrapper />);
 
     fill(/project key/i, 'scrum');
     expect((screen.getByLabelText(/project key/i) as HTMLInputElement).value).toBe('scrum');
@@ -150,7 +172,7 @@ describe('request payload', () => {
 
 describe('loading and duplicate submission', () => {
   it('disables the controls while the request is pending', async () => {
-    render(<TicketCreationPanel />);
+    render(<Wrapper />);
     mockedCreate.mockReturnValue(new Promise<CreatedTicket>(() => {}));
 
     fillForm();
@@ -163,7 +185,7 @@ describe('loading and duplicate submission', () => {
   });
 
   it('prevents duplicate submissions while a request is in flight', async () => {
-    render(<TicketCreationPanel />);
+    render(<Wrapper />);
     let resolveCreate: (value: CreatedTicket) => void = () => {};
     mockedCreate.mockReturnValue(
       new Promise<CreatedTicket>((resolve) => {
@@ -186,10 +208,11 @@ describe('loading and duplicate submission', () => {
 
 describe('success behavior', () => {
   it('shows the returned issue key and clears title and description but retains the canonical uppercase project key', async () => {
-    render(<TicketCreationPanel />);
+    render(<Wrapper initialProjectKey="scrum" />);
     mockedCreate.mockResolvedValue(created);
 
-    fillForm({ projectKey: 'scrum' });
+    fill(/title/i, 'Stale Service Account');
+    fill(/description/i, 'Finding details');
     submit();
 
     const status = await screen.findByRole('status');
@@ -197,6 +220,30 @@ describe('success behavior', () => {
     expect((screen.getByLabelText(/project key/i) as HTMLInputElement).value).toBe('SCRUM');
     expect((screen.getByLabelText(/title/i) as HTMLInputElement).value).toBe('');
     expect((screen.getByLabelText(/description/i) as HTMLTextAreaElement).value).toBe('');
+  });
+
+  it('calls onTicketCreated after a successful creation', async () => {
+    const onCreated = vi.fn();
+    render(<Wrapper onTicketCreated={onCreated} />);
+    mockedCreate.mockResolvedValue(created);
+
+    fillForm();
+    submit();
+
+    await screen.findByRole('status');
+    expect(onCreated).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not call onTicketCreated after a failed creation', async () => {
+    const onCreated = vi.fn();
+    render(<Wrapper onTicketCreated={onCreated} />);
+    mockedCreate.mockRejectedValue(new TicketApiError('unreachable', 'x'));
+
+    fillForm();
+    submit();
+
+    await screen.findByRole('alert');
+    expect(onCreated).not.toHaveBeenCalled();
   });
 });
 
@@ -209,44 +256,44 @@ describe('error categories', () => {
   }
 
   it('shows not-connected copy', async () => {
-    render(<TicketCreationPanel />);
+    render(<Wrapper />);
     expect(await submitFailingWith('not_connected')).toHaveTextContent(/no longer connected to jira/i);
   });
 
   it('shows project-inaccessible copy', async () => {
-    render(<TicketCreationPanel />);
+    render(<Wrapper />);
     expect(await submitFailingWith('project_inaccessible')).toHaveTextContent(/could not be found or is not accessible/i);
   });
 
   it('shows task-unsupported copy', async () => {
-    render(<TicketCreationPanel />);
+    render(<Wrapper />);
     expect(await submitFailingWith('task_unsupported')).toHaveTextContent(/does not support the task issue type/i);
   });
 
   it('shows credentials-rejected copy', async () => {
-    render(<TicketCreationPanel />);
+    render(<Wrapper />);
     expect(await submitFailingWith('credentials_rejected')).toHaveTextContent(/stored jira credentials were rejected/i);
   });
 
   it('shows not-configured copy', async () => {
-    render(<TicketCreationPanel />);
+    render(<Wrapper />);
     expect(await submitFailingWith('not_configured')).toHaveTextContent(/not configured on the server/i);
   });
 
   it('shows authentication copy', async () => {
-    render(<TicketCreationPanel />);
+    render(<Wrapper />);
     expect(await submitFailingWith('authentication')).toHaveTextContent(/session is no longer valid/i);
   });
 
   it('warns about a possible duplicate on a network failure', async () => {
-    render(<TicketCreationPanel />);
+    render(<Wrapper />);
     const alert = await submitFailingWith('network');
     expect(alert).toHaveTextContent(/check jira/i);
     expect(alert).toHaveTextContent(/duplicate/i);
   });
 
   it('warns about a possible duplicate on a server failure and never shows the raw message', async () => {
-    render(<TicketCreationPanel />);
+    render(<Wrapper />);
     const alert = await submitFailingWith('server');
     expect(alert).toHaveTextContent(/check jira/i);
     expect(alert).toHaveTextContent(/duplicate/i);
@@ -254,7 +301,7 @@ describe('error categories', () => {
   });
 
   it('treats an unexpected error type as an uncertain server outcome', async () => {
-    render(<TicketCreationPanel />);
+    render(<Wrapper />);
     mockedCreate.mockRejectedValue(new Error('boom'));
 
     fillForm();
@@ -269,7 +316,7 @@ describe('error categories', () => {
 
 describe('uncertain outcomes warn about possible duplicates', () => {
   it('warns to check Jira before retrying on a timeout', async () => {
-    render(<TicketCreationPanel />);
+    render(<Wrapper />);
     mockedCreate.mockRejectedValue(new TicketApiError('timeout', 'ignored'));
 
     fillForm();
@@ -281,7 +328,7 @@ describe('uncertain outcomes warn about possible duplicates', () => {
   });
 
   it('warns to check Jira before retrying on a generic upstream failure', async () => {
-    render(<TicketCreationPanel />);
+    render(<Wrapper />);
     mockedCreate.mockRejectedValue(new TicketApiError('unreachable', 'ignored'));
 
     fillForm();
@@ -295,7 +342,7 @@ describe('uncertain outcomes warn about possible duplicates', () => {
 
 describe('accessibility', () => {
   it('announces validation errors through an alert region', async () => {
-    render(<TicketCreationPanel />);
+    render(<Wrapper />);
 
     submit();
 
@@ -303,7 +350,7 @@ describe('accessibility', () => {
   });
 
   it('announces a successful creation through a status region', async () => {
-    render(<TicketCreationPanel />);
+    render(<Wrapper />);
     mockedCreate.mockResolvedValue(created);
 
     fillForm();

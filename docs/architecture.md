@@ -1,7 +1,7 @@
 # Architecture
 
 This document describes the architecture that currently exists through
-Milestone 10. It intentionally avoids designing later domain layers in detail.
+Milestone 11. It intentionally avoids designing later domain layers in detail.
 
 ## Monorepo structure
 
@@ -878,3 +878,117 @@ the percent-encoded current key — never a self/redirect/location URL.
 unauthenticated request returns 401 `unauthenticated`. The mapping mirrors the
 sanitized Jira outcomes already used by ticket creation; no variant carries the
 plaintext token, raw Jira content, or internal error detail.
+
+## Frontend recent-tickets UI (Milestone 11)
+
+Milestone 11 adds the user-facing recent-tickets view. It is **frontend only**
+and consumes the unchanged Milestone 10 `GET /api/tickets?projectKey=...`
+contract; no backend behavior changed. The flow follows the same client boundary
+as the rest of the frontend: it holds no secrets, talks to the backend only over
+a relative `/api` request with the same-origin session cookie, and derives
+displayed values solely from the validated API response.
+
+### Shared project-key state
+
+Milestone 9 held the project key as local state inside `TicketCreationPanel`.
+Milestone 11 lifts it to `AuthenticatedShell`, where it is shared between the
+creation panel and the new recent-tickets panel. The shell owns two pieces of
+state: the raw project-key string and an integer `refreshKey`.
+
+`handleProjectKeyChange` is a stable `useCallback` that calls `setProjectKey`;
+`handleTicketCreated` is a stable `useCallback` that increments `refreshKey`.
+Both are stable across renders, so neither child re-renders solely because the
+parent re-renders. `TicketCreationPanel` receives `projectKey`,
+`onProjectKeyChange`, and `onTicketCreated` as props; it calls
+`onProjectKeyChange` with the normalized key after a successful creation and
+calls `onTicketCreated` to signal the refresh. Both panels are rendered inside
+the same `jiraConnected` guard, so the state is only ever live when it matters.
+
+### Shared project-key utility
+
+`src/utils/project-key.ts` exports `normalizeProjectKey`, `isValidProjectKey`,
+`PROJECT_KEY_PATTERN`, and `MAX_PROJECT_KEY_LENGTH`. Both panels import from
+this module, eliminating the duplicated validation logic that would otherwise
+exist in two components. The pattern is the same conservative Jira project-key
+syntax the backend enforces: `^[A-Z][A-Z0-9]+$`, at least two characters, at
+most ten.
+
+### Read API module extension
+
+`src/api/tickets.ts` gains a second export group for the read side:
+`RecentTicket`, `ListRecentTicketsResult`, `RecentTicketsErrorKind`,
+`RecentTicketsApiError`, `messageForReadError`, and `listRecentTickets`. The
+function sends `GET /api/tickets?projectKey=<encoded>` with
+`credentials: 'same-origin'` and an optional `AbortSignal`. It propagates
+`AbortError` (a `DOMException` with `name === 'AbortError'`) raw without wrapping
+it in a `RecentTicketsApiError`, so the caller can check `signal.aborted` rather
+than catch-filtering. Every other failure — including a network `TypeError` — is
+mapped to a typed `RecentTicketsApiError`. The backend `message` field is always
+discarded; `messageForReadError` provides safe, generic copy for each kind.
+
+Success body validation is stricter than the creation side, because the response
+is rendered directly:
+
+- The top-level body must be an object with an `Array` `tickets` field.
+- Each ticket must have non-empty string `issueId`, `issueKey`, `title`, and
+  `url`, and a non-empty string `createdAt` whose `Date` parse is not `NaN`.
+- Each `url` must parse as a valid URL with the `https:` protocol, a hostname
+  matching `/^[^.]+\.atlassian\.net$/`, and a path starting with `/browse/`.
+  HTTP URLs, non-Atlassian hosts, bare `atlassian.net`, and paths outside
+  `/browse/` are all rejected.
+
+A single invalid ticket item rejects the whole response as a `server` error
+rather than silently dropping the item, so the caller always receives a
+consistent, fully-validated list.
+
+### RecentTicketsPanel component
+
+`src/components/RecentTicketsPanel.tsx` accepts `projectKey: string` and
+`refreshKey: number`. Its internal state is a single discriminated union:
+
+```
+{ type: 'prompt' } | { type: 'loading' } | { type: 'success'; tickets } | { type: 'error'; kind }
+```
+
+**Debouncing vs. immediate refresh:** the component uses two `useEffect` hooks:
+
+- *Effect 1* responds to `projectKey` changes. When the normalized key is
+  invalid it sets `prompt` state immediately and cancels any pending debounce.
+  When the key is valid it sets `loading` state immediately (so the UI is
+  responsive from the first render) and starts a 400 ms debounce timer; when
+  the timer fires it calls `doFetch`.
+- *Effect 2* responds to `refreshKey` changes. It skips the initial render
+  (`refreshKey === 0`). On a positive increment it cancels any pending debounce,
+  reads the current project key from a ref (`projectKeyRef.current`), and calls
+  `doFetch` immediately — bypassing the 400 ms wait so the new ticket appears
+  without delay.
+
+`projectKeyRef` is kept in sync during the render body (`projectKeyRef.current =
+projectKey`), so the refreshKey effect always reads the latest project key
+without it being a reactive dependency of that effect, avoiding an unintended
+extra fetch on every key change.
+
+**Stale-response prevention:** `doFetch` (a stable `useCallback`) creates an
+`AbortController` and aborts any previous controller held in `abortRef` before
+starting a new request. Both the `.then` and `.catch` handlers check
+`controller.signal.aborted` before updating state, so a response that arrives
+after the project key changed (or after the component unmounts) is silently
+dropped. An `AbortError` is not mapped to an error state.
+
+**Rendering:** the success state renders an ordered `<ul>` of tickets. Each
+item shows the issue key in a monospace span, the title as an `<a>` link with
+`target="_blank" rel="noopener noreferrer"`, and a `<time>` element with the
+ISO `dateTime` attribute. The error state renders a `role="alert"` region
+containing a safe copy paragraph and a **Retry** button that calls `doFetch`
+directly. Raw backend messages are never rendered.
+
+### End-to-end flow
+
+```
+AuthenticatedShell (projectKey, refreshKey)
+  |-> TicketCreationPanel (projectKey, onProjectKeyChange, onTicketCreated)
+  |     -> POST /api/tickets -> onTicketCreated() -> refreshKey++
+  |-> RecentTicketsPanel (projectKey, refreshKey)
+        -> GET /api/tickets?projectKey=<key> (debounced / immediate on refresh)
+        -> success: list of tickets | error: safe copy + Retry
+```

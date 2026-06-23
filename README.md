@@ -2,8 +2,13 @@
 
 A focused proof of concept for integrating Oasis Security IdentityHub with Jira.
 
-This repository is built in milestones. The current milestone (Milestone 10)
-adds a backend-only recent-tickets read: an authenticated
+This repository is built in milestones. The current milestone (Milestone 11)
+adds the frontend recent-tickets UI: the authenticated shell now displays the
+ten most recent tickets for a selected Jira project. It is frontend only and
+consumes the unchanged Milestone 10 `GET /api/tickets?projectKey=...` contract;
+no backend behavior changed.
+
+Milestone 10 added a backend-only recent-tickets read: an authenticated
 `GET /api/tickets?projectKey=...` endpoint that returns the ten most recent
 tickets created through this application for the tenant's currently connected
 Jira site and a selected project. Membership and order come from local
@@ -100,7 +105,74 @@ scoped API-token support; roles, permissions, or tenant-admin UI; API-key
 functionality; browser credential persistence; global frontend state; and
 routing.
 
-## Current milestone scope (Milestone 10: Recent tickets backend)
+## Current milestone scope (Milestone 11: Recent tickets UI)
+
+Frontend only; it consumes the unchanged Milestone 10 backend contract
+(`GET /api/tickets?projectKey=...`). No backend changes were made. Milestone 11
+lets an authenticated user whose tenant is connected to Jira view the ten most
+recent tickets created through this application for a selected project.
+
+Implemented:
+
+- **Shared project-key state** lifted to `AuthenticatedShell`
+  (`apps/web/src/components/AuthenticatedShell.tsx`). The project key entered
+  in the ticket-creation form is now shared with the recent-tickets panel: one
+  controlled input drives both, so typing a project key in the creation form
+  immediately updates the recent-tickets list. A `refreshKey` counter is
+  incremented on each successful ticket creation to trigger an immediate panel
+  refresh. Stable `useCallback` handlers prevent unnecessary child re-renders.
+- **A shared project-key utility** (`apps/web/src/utils/project-key.ts`) with
+  `normalizeProjectKey`, `isValidProjectKey`, `PROJECT_KEY_PATTERN`, and
+  `MAX_PROJECT_KEY_LENGTH`, shared between `TicketCreationPanel` and
+  `RecentTicketsPanel`.
+- **A `RecentTicketsPanel` component**
+  (`apps/web/src/components/RecentTicketsPanel.tsx`) rendered inside the
+  authenticated shell when the tenant is Jira-connected. It accepts a
+  `projectKey` prop and a `refreshKey` prop. It renders:
+  - **Prompt state**: shown when no valid project key is entered — explains that
+    a project key is required and makes no network request.
+  - **Loading state**: shown immediately when a valid key is entered or changes,
+    before the debounced fetch fires.
+  - **Empty state**: shown when the API returns an empty tickets array.
+  - **Success state**: a list of tickets, each showing the Jira issue key, the
+    title as an `<a>` link (opening in a new tab with `rel="noopener noreferrer"`),
+    and the creation time in a `<time>` element with the ISO `dateTime` attribute.
+  - **Error state**: a `role="alert"` region with safe, category-specific copy
+    and a **Retry** button. Raw backend messages are never shown.
+- **Debounced project-key changes**: a 400 ms debounce gate prevents sending a
+  request on every keystroke. The panel enters the loading state immediately
+  when a valid key is provided, but the network request is delayed. When
+  `refreshKey` increments (after a successful ticket creation), the debounce is
+  bypassed and the fetch fires immediately, showing the new ticket without a 400 ms
+  wait.
+- **Stale-response prevention via `AbortController`**: every new fetch cancels
+  the previous one. Aborted responses are silently ignored — no error is shown.
+  Changing the project key while a request is in flight shows the loading state
+  for the new key rather than displaying results from the old key.
+- **Defensive response parsing** in `listRecentTickets`
+  (`apps/web/src/api/tickets.ts`): each ticket item is validated for non-empty
+  string fields, a valid ISO timestamp, and a safe Atlassian URL
+  (`https://*.atlassian.net/browse/...`). A malformed success body becomes a
+  `server` error. `AbortError` is propagated raw. Raw backend messages are
+  always discarded.
+- **Frontend tests** (Vitest + React Testing Library) covering the
+  `listRecentTickets` API function (41 tests: request shape, URL encoding,
+  `AbortSignal` forwarding, success parsing, all malformed-body/item rejections,
+  timestamp and URL validation, backend error-code mapping, fallback handling,
+  abort behavior, and `messageForReadError` completeness) and the
+  `RecentTicketsPanel` component (31 tests: prompt, loading, empty, success
+  rendering, all error kinds with retry, key normalization, changing project key,
+  stale-response prevention, refresh on creation). The `TicketCreationPanel`
+  tests are updated for the lifted `projectKey` prop via a stateful `Wrapper`.
+  The integration test suite in `App.test.tsx` gains five new tests covering the
+  panel's conditional display and the creation-triggers-refresh behavior.
+
+Explicitly **not** implemented in Milestone 11: any backend changes; pagination,
+search, or filtering beyond a single `projectKey`; inline creation-to-list
+animation or optimistic updates; polling or background auto-refresh; ticket
+editing, deletion, or transitions; configurable debounce or refresh intervals.
+
+## Earlier milestone scope (Milestone 10: Recent tickets backend)
 
 Backend only. Milestone 10 adds the first ticket read: an authenticated
 `GET /api/tickets?projectKey=...` that returns the ten most recent tickets

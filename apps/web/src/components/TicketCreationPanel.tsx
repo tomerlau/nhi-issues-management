@@ -5,22 +5,18 @@ import {
   messageForTicketError,
   TicketApiError,
 } from '../api/tickets';
+import { normalizeProjectKey, isValidProjectKey } from '../utils/project-key';
 
-// Client-side usability limits mirroring the authoritative backend contract. The
-// backend remains the source of truth; these checks only avoid an obviously
-// invalid network round-trip and are not a security boundary.
-const MAX_PROJECT_KEY_LENGTH = 10;
 const MAX_TITLE_LENGTH = 255;
 const MAX_DESCRIPTION_LENGTH = 5000;
-const PROJECT_KEY_PATTERN = /^[A-Z][A-Z0-9]+$/;
 
 type SubmitFeedback = { message: string; uncertain: boolean };
 
 /**
  * Validate the form locally, returning a single message for the first problem or
- * the normalized payload to send. Project keys are normalized to uppercase; title
- * and description are trimmed (internal line breaks in the description survive
- * because `trim` only removes surrounding whitespace).
+ * the normalized payload to send. The project key is normalized using the shared
+ * helper; title and description are trimmed (internal line breaks in the
+ * description survive because `trim` only removes surrounding whitespace).
  */
 function validate(
   projectKey: string,
@@ -30,11 +26,11 @@ function validate(
   ok: false;
   message: string;
 } {
-  const normalizedKey = projectKey.trim().toUpperCase();
+  const normalizedKey = normalizeProjectKey(projectKey);
   if (normalizedKey.length === 0) {
     return { ok: false, message: 'Enter a Jira project key.' };
   }
-  if (normalizedKey.length > MAX_PROJECT_KEY_LENGTH || !PROJECT_KEY_PATTERN.test(normalizedKey)) {
+  if (!isValidProjectKey(normalizedKey)) {
     return {
       ok: false,
       message:
@@ -67,11 +63,21 @@ function validate(
   };
 }
 
+interface TicketCreationPanelProps {
+  projectKey: string;
+  onProjectKeyChange: (key: string) => void;
+  onTicketCreated?: () => void;
+}
+
 /**
  * Create an NHI finding ticket against the tenant's shared Jira connection. The
  * shell renders this panel only once the tenant connection has loaded as
  * connected, so it assumes a connection exists and reacts safely if the backend
  * later reports otherwise.
+ *
+ * The project key is shared state owned by the parent shell; this panel consumes
+ * it and reports changes up via `onProjectKeyChange`. On successful creation it
+ * calls `onTicketCreated` so the parent can refresh the recent-tickets list.
  *
  * The issue type is always the project's `Task` type, chosen by the backend; this
  * form sends only the project key, title, and description. Submissions are guarded
@@ -79,7 +85,11 @@ function validate(
  * idempotent, any uncertain outcome (timeout, unreachable, network, or an
  * unexpected server failure) warns the user to check Jira before retrying.
  */
-export default function TicketCreationPanel() {
+export default function TicketCreationPanel({
+  projectKey,
+  onProjectKeyChange,
+  onTicketCreated,
+}: TicketCreationPanelProps) {
   const headingId = useId();
   const projectKeyId = useId();
   const projectKeyHintId = useId();
@@ -88,7 +98,6 @@ export default function TicketCreationPanel() {
   const descriptionHintId = useId();
   const errorId = useId();
 
-  const [projectKey, setProjectKey] = useState('');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -114,13 +123,14 @@ export default function TicketCreationPanel() {
 
     createTicket(result.value)
       .then((ticket) => {
-        // Keep the project key so the user can file another ticket in the same
-        // project; clear the per-ticket fields.
-        setProjectKey(result.value.projectKey);
+        // Report the normalized key back to the parent so the shared state stays
+        // canonical; clear only the per-ticket fields.
+        onProjectKeyChange(result.value.projectKey);
         setTitle('');
         setDescription('');
         setCreatedIssueKey(ticket.issueKey);
         setSubmitting(false);
+        onTicketCreated?.();
       })
       .catch((error: unknown) => {
         const kind = error instanceof TicketApiError ? error.kind : 'server';
@@ -159,7 +169,7 @@ export default function TicketCreationPanel() {
             autoCapitalize="none"
             spellCheck={false}
             value={projectKey}
-            onChange={(event) => setProjectKey(event.target.value)}
+            onChange={(event) => onProjectKeyChange(event.target.value)}
             disabled={submitting}
             required
             aria-invalid={feedback !== null && !feedback.uncertain}

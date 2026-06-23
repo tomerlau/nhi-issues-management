@@ -1,5 +1,5 @@
 /**
- * Frontend ticket-creation API.
+ * Frontend ticket API: creation and recent-ticket listing.
  *
  * Talks only to the relative `/api/tickets` endpoint over the Vite dev proxy and
  * relies exclusively on the backend's HttpOnly session cookie. The tenant and the
@@ -8,9 +8,13 @@
  * ownership, tenant, user, connection, site, or issue-type field.
  *
  * Security: requests, responses, and errors are never logged, and raw backend or
- * Jira error text is never surfaced. The request is never retried automatically,
- * because an unconfirmed creation could be duplicated by a retry.
+ * Jira error text is never surfaced. The creation request is never retried
+ * automatically, because an unconfirmed creation could be duplicated by a retry.
  */
+
+// ---------------------------------------------------------------------------
+// Ticket creation
+// ---------------------------------------------------------------------------
 
 /** The exact fields the user submits to create a ticket. Nothing else is sent. */
 export interface TicketCreationRequest {
@@ -232,4 +236,241 @@ export async function createTicket(input: TicketCreationRequest): Promise<Create
   }
 
   return parseCreated(await readJson(response));
+}
+
+// ---------------------------------------------------------------------------
+// Recent-ticket listing
+// ---------------------------------------------------------------------------
+
+/** A single recent ticket returned by the server, with values hydrated from Jira. */
+export interface RecentTicket {
+  issueId: string;
+  issueKey: string;
+  title: string;
+  createdAt: string;
+  url: string;
+}
+
+/** The success shape for a recent-ticket list response. */
+export interface ListRecentTicketsResult {
+  tickets: RecentTicket[];
+}
+
+/**
+ * Error kinds for recent-ticket read failures. These are never uncertain outcomes
+ * (no ticket is created on a read), so no duplicate-creation warning applies.
+ */
+export type RecentTicketsErrorKind =
+  | 'invalid_request'
+  | 'authentication'
+  | 'not_connected'
+  | 'credentials_rejected'
+  | 'timeout'
+  | 'unreachable'
+  | 'not_configured'
+  | 'internal_error'
+  | 'network'
+  | 'server';
+
+/** A typed read failure carrying only a UI-safe kind. */
+export class RecentTicketsApiError extends Error {
+  readonly kind: RecentTicketsErrorKind;
+
+  constructor(kind: RecentTicketsErrorKind, message: string) {
+    super(message);
+    this.name = 'RecentTicketsApiError';
+    this.kind = kind;
+  }
+}
+
+/** Generic, UI-safe copy for each read error kind. Never includes backend text. */
+export function messageForReadError(kind: RecentTicketsErrorKind): string {
+  switch (kind) {
+    case 'invalid_request':
+      return 'The project key is not valid.';
+    case 'authentication':
+      return 'Your session is no longer valid. Please sign in again.';
+    case 'not_connected':
+      return 'Your tenant is not connected to Jira. Connect Jira to view recent tickets.';
+    case 'credentials_rejected':
+      return 'The stored Jira credentials were rejected. Reconnect Jira and try again.';
+    case 'timeout':
+      return 'Jira did not respond in time. Try again.';
+    case 'unreachable':
+      return 'Jira could not be reached. Try again.';
+    case 'not_configured':
+      return 'Jira integration is not configured on the server. Contact an administrator.';
+    case 'internal_error':
+      return 'Something went wrong on the server. Try again.';
+    case 'network':
+      return 'Unable to reach the server. Try again.';
+    case 'server':
+    default:
+      return 'Something went wrong. Try again.';
+  }
+}
+
+/** Whether a URL is a safe Jira Cloud issue URL on an *.atlassian.net host. */
+function isValidJiraUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return (
+      parsed.protocol === 'https:' &&
+      /^[^.]+\.atlassian\.net$/.test(parsed.hostname) &&
+      parsed.pathname.startsWith('/browse/')
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Map a backend error code to a read error kind. */
+function readKindForCode(code: string | undefined): RecentTicketsErrorKind | undefined {
+  switch (code) {
+    case 'invalid_request':
+      return 'invalid_request';
+    case 'unauthenticated':
+      return 'authentication';
+    case 'jira_not_connected':
+      return 'not_connected';
+    case 'jira_credentials_rejected':
+      return 'credentials_rejected';
+    case 'jira_timeout':
+      return 'timeout';
+    case 'jira_unreachable':
+      return 'unreachable';
+    case 'jira_not_configured':
+      return 'not_configured';
+    case 'internal_error':
+      return 'internal_error';
+    default:
+      return undefined;
+  }
+}
+
+async function readErrorCodeForRead(response: Response): Promise<string | undefined> {
+  try {
+    const body: unknown = await response.json();
+    if (
+      typeof body === 'object' &&
+      body !== null &&
+      'error' in body &&
+      typeof (body as { error: unknown }).error === 'object' &&
+      (body as { error: unknown }).error !== null
+    ) {
+      const code = (body as { error: { code?: unknown } }).error.code;
+      if (typeof code === 'string') {
+        return code;
+      }
+    }
+  } catch {
+    // Non-JSON or missing body: return undefined for unknown mapping.
+  }
+  return undefined;
+}
+
+async function readErrorForResponse(response: Response): Promise<RecentTicketsApiError> {
+  const kind = readKindForCode(await readErrorCodeForRead(response));
+  if (kind) {
+    return new RecentTicketsApiError(kind, messageForReadError(kind));
+  }
+  if (response.status === 401) {
+    return new RecentTicketsApiError('authentication', messageForReadError('authentication'));
+  }
+  return new RecentTicketsApiError('server', messageForReadError('server'));
+}
+
+/**
+ * Defensively validate a ticket item from the response. Returns the parsed item or
+ * throws a `server` {@link RecentTicketsApiError} if the item is malformed.
+ */
+function parseTicketItem(item: unknown): RecentTicket {
+  if (typeof item !== 'object' || item === null) {
+    throw new RecentTicketsApiError('server', messageForReadError('server'));
+  }
+
+  const r = item as Record<string, unknown>;
+
+  if (
+    typeof r.issueId !== 'string' || r.issueId.length === 0 ||
+    typeof r.issueKey !== 'string' || r.issueKey.length === 0 ||
+    typeof r.title !== 'string' || r.title.length === 0 ||
+    typeof r.createdAt !== 'string' || r.createdAt.length === 0 ||
+    typeof r.url !== 'string' || r.url.length === 0
+  ) {
+    throw new RecentTicketsApiError('server', messageForReadError('server'));
+  }
+
+  if (isNaN(new Date(r.createdAt).getTime())) {
+    throw new RecentTicketsApiError('server', messageForReadError('server'));
+  }
+
+  if (!isValidJiraUrl(r.url)) {
+    throw new RecentTicketsApiError('server', messageForReadError('server'));
+  }
+
+  return {
+    issueId: r.issueId,
+    issueKey: r.issueKey,
+    title: r.title,
+    createdAt: r.createdAt,
+    url: r.url,
+  };
+}
+
+/**
+ * Parse and validate the full recent-tickets success response. Throws a `server`
+ * error if the top-level shape is wrong or any ticket item is malformed.
+ */
+function parseRecentTicketsBody(body: unknown): RecentTicket[] {
+  if (
+    typeof body !== 'object' ||
+    body === null ||
+    !Array.isArray((body as { tickets?: unknown }).tickets)
+  ) {
+    throw new RecentTicketsApiError('server', messageForReadError('server'));
+  }
+
+  return ((body as { tickets: unknown[] }).tickets).map(parseTicketItem);
+}
+
+/**
+ * List the ten most recent tickets for the caller's tenant and the given project.
+ * Resolves to `{ tickets }` on success. Rejects with {@link RecentTicketsApiError}
+ * on server, Jira, authentication, network, or malformed-response failures.
+ *
+ * An aborted request propagates the `AbortError` from fetch so callers can
+ * distinguish abort from a real network failure.
+ */
+export async function listRecentTickets(
+  projectKey: string,
+  signal?: AbortSignal,
+): Promise<ListRecentTicketsResult> {
+  const params = new URLSearchParams({ projectKey });
+  let response: Response;
+  try {
+    response = await fetch(`/api/tickets?${params.toString()}`, {
+      method: 'GET',
+      credentials: 'same-origin',
+      signal,
+    });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw err;
+    }
+    throw new RecentTicketsApiError('network', messageForReadError('network'));
+  }
+
+  if (!response.ok) {
+    throw await readErrorForResponse(response);
+  }
+
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    throw new RecentTicketsApiError('server', messageForReadError('server'));
+  }
+
+  return { tickets: parseRecentTicketsBody(body) };
 }

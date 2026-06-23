@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 import { AuthError, logout, type SafeUser } from '../api/auth';
 import JiraConnectionPanel from './JiraConnectionPanel';
+import RecentTicketsPanel from './RecentTicketsPanel';
 import TicketCreationPanel from './TicketCreationPanel';
 
 interface AuthenticatedShellProps {
@@ -19,16 +20,31 @@ function logoutMessage(error: unknown): string {
  * The minimal authenticated application shell. It shows only the safe user fields
  * the backend returned (display name and email) and a logout action. Internal
  * user and tenant IDs are deliberately never rendered.
+ *
+ * The project key is shared state owned here so both the ticket-creation form and
+ * the recent-tickets panel use the same selection. A `refreshKey` counter is
+ * incremented after a successful creation so the recent-tickets panel refreshes
+ * without debounce.
  */
 export default function AuthenticatedShell({ user, onLoggedOut }: AuthenticatedShellProps) {
   const [loggingOut, setLoggingOut] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [jiraConnected, setJiraConnected] = useState(false);
+  const [projectKey, setProjectKey] = useState('');
+  const [refreshKey, setRefreshKey] = useState(0);
 
   // Stable so the connection panel's reporting effect does not re-fire on every
   // shell render.
   const handleConnectionChange = useCallback((connected: boolean) => {
     setJiraConnected(connected);
+  }, []);
+
+  const handleProjectKeyChange = useCallback((key: string) => {
+    setProjectKey(key);
+  }, []);
+
+  const handleTicketCreated = useCallback(() => {
+    setRefreshKey((k) => k + 1);
   }, []);
 
   const handleLogout = () => {
@@ -72,7 +88,19 @@ export default function AuthenticatedShell({ user, onLoggedOut }: AuthenticatedS
           </p>
         )}
         <JiraConnectionPanel onConnectionChange={handleConnectionChange} />
-        {jiraConnected && <TicketCreationPanel />}
+        {jiraConnected && (
+          <>
+            <TicketCreationPanel
+              projectKey={projectKey}
+              onProjectKeyChange={handleProjectKeyChange}
+              onTicketCreated={handleTicketCreated}
+            />
+            <RecentTicketsPanel
+              projectKey={projectKey}
+              refreshKey={refreshKey}
+            />
+          </>
+        )}
       </main>
     </div>
   );

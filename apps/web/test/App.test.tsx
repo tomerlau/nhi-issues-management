@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../src/App';
 import { AuthError, login, logout, restoreSession, type SafeUser } from '../src/api/auth';
 import { getJiraConnection, JiraApiError } from '../src/api/jira';
+import { createTicket, listRecentTickets, TicketApiError, type CreatedTicket } from '../src/api/tickets';
 
 vi.mock('../src/api/auth', async () => {
   const actual = await vi.importActual<typeof import('../src/api/auth')>('../src/api/auth');
@@ -25,10 +26,24 @@ vi.mock('../src/api/jira', async () => {
   };
 });
 
+// The shell also mounts the ticket panels. Stub both so these tests never make
+// real network requests (recent tickets are not requested until a valid project
+// key is entered, but creation is exercised in the integration tests below).
+vi.mock('../src/api/tickets', async () => {
+  const actual = await vi.importActual<typeof import('../src/api/tickets')>('../src/api/tickets');
+  return {
+    ...actual,
+    createTicket: vi.fn(),
+    listRecentTickets: vi.fn(),
+  };
+});
+
 const mockedRestore = vi.mocked(restoreSession);
 const mockedLogin = vi.mocked(login);
 const mockedLogout = vi.mocked(logout);
 const mockedGetJira = vi.mocked(getJiraConnection);
+const mockedCreateTicket = vi.mocked(createTicket);
+const mockedListRecentTickets = vi.mocked(listRecentTickets);
 
 const alice: SafeUser = {
   id: 'user-acme-alice',
@@ -51,6 +66,7 @@ async function renderLoggedOut() {
 beforeEach(() => {
   vi.clearAllMocks();
   mockedGetJira.mockResolvedValue({ connected: false });
+  mockedListRecentTickets.mockResolvedValue({ tickets: [] });
 });
 
 afterEach(() => {
@@ -245,6 +261,106 @@ describe('ticket creation gating', () => {
     await screen.findByText(/unable to reach the server/i);
 
     expect(screen.queryByLabelText(/project key/i)).not.toBeInTheDocument();
+  });
+});
+
+describe('recent-tickets panel', () => {
+  async function renderConnected() {
+    mockedRestore.mockResolvedValue(alice);
+    mockedGetJira.mockResolvedValue({
+      connected: true,
+      siteUrl: 'https://acme.atlassian.net',
+      email: 'alice@example.com',
+    });
+    render(<App />);
+    await screen.findByLabelText(/project key/i);
+  }
+
+  it('shows the recent-tickets panel when Jira is connected', async () => {
+    await renderConnected();
+
+    expect(screen.getByRole('heading', { name: /recent tickets/i })).toBeInTheDocument();
+  });
+
+  it('shows the prompt state when no project key is entered', async () => {
+    await renderConnected();
+
+    expect(screen.getByText(/enter a jira project key/i)).toBeInTheDocument();
+    expect(mockedListRecentTickets).not.toHaveBeenCalled();
+  });
+
+  it('hides the recent-tickets panel when Jira is disconnected', async () => {
+    mockedRestore.mockResolvedValue(alice);
+    mockedGetJira.mockResolvedValue({ connected: false });
+
+    render(<App />);
+    await screen.findByText(/not connected to jira yet/i);
+
+    expect(screen.queryByText(/recent tickets/i)).not.toBeInTheDocument();
+  });
+});
+
+describe('ticket creation refreshes recent tickets', () => {
+  it('calls listRecentTickets after a successful ticket creation', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+
+    mockedRestore.mockResolvedValue(alice);
+    mockedGetJira.mockResolvedValue({
+      connected: true,
+      siteUrl: 'https://acme.atlassian.net',
+      email: 'alice@example.com',
+    });
+    mockedCreateTicket.mockResolvedValue({ issueId: '10001', issueKey: 'SCRUM-1' } as CreatedTicket);
+    mockedListRecentTickets.mockResolvedValue({ tickets: [] });
+
+    render(<App />);
+    await screen.findByLabelText(/project key/i);
+
+    typeInto(/project key/i, 'SCRUM');
+    typeInto(/title/i, 'Test ticket');
+    typeInto(/description/i, 'Test description');
+    fireEvent.click(screen.getByRole('button', { name: /^create ticket$/i }));
+
+    await screen.findByRole('status');
+
+    await waitFor(() => {
+      expect(mockedListRecentTickets).toHaveBeenCalledWith('SCRUM', expect.anything());
+    });
+
+    vi.useRealTimers();
+  });
+
+  it('does not call listRecentTickets after a failed ticket creation', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+
+    mockedRestore.mockResolvedValue(alice);
+    mockedGetJira.mockResolvedValue({
+      connected: true,
+      siteUrl: 'https://acme.atlassian.net',
+      email: 'alice@example.com',
+    });
+    mockedCreateTicket.mockRejectedValue(new TicketApiError('not_connected', 'x'));
+
+    render(<App />);
+    await screen.findByLabelText(/project key/i);
+
+    typeInto(/project key/i, 'SCRUM');
+    typeInto(/title/i, 'Test ticket');
+    typeInto(/description/i, 'Test description');
+    fireEvent.click(screen.getByRole('button', { name: /^create ticket$/i }));
+
+    await screen.findByRole('alert');
+
+    // listRecentTickets should not have been called beyond initial debounce behavior.
+    // Since there's an active valid key, it may be called by the debounce but NOT by
+    // the failed creation trigger.
+    const callCountAfterFailure = mockedListRecentTickets.mock.calls.length;
+
+    // Wait a bit to confirm no extra call from the failure.
+    await new Promise<void>((r) => setTimeout(r, 100));
+    expect(mockedListRecentTickets.mock.calls.length).toBe(callCountAfterFailure);
+
+    vi.useRealTimers();
   });
 });
 
