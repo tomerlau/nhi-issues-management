@@ -180,14 +180,24 @@ raw Jira/backend text is shown.
 
 Using browser DevTools and shell tooling, confirm:
 
-- `localStorage`, `sessionStorage`, IndexedDB, and cookies hold no Jira token,
-  password, session token plaintext, or API key.
+- `localStorage`, `sessionStorage`, and IndexedDB hold no Jira token,
+  password, session token, or API key.
+- The `nhi_session` cookie **is** the session token by design. Confirm it
+  exists with the expected security attributes (`HttpOnly`, `SameSite=Lax`,
+  `Path=/`, and `Secure` when `NODE_ENV=production`) and that
+  `document.cookie` evaluated in the DevTools console does **not** include
+  `nhi_session` (the `HttpOnly` flag is enforced).
+- The raw session token appears only in the `Set-Cookie` response header of
+  `POST /api/auth/login` and in the outbound `Cookie` request header on
+  same-origin `/api/*` calls. It must not appear in any JSON response body,
+  the DOM, the URL, the console, or application logs.
 - API responses never contain the Jira token, the `Authorization` header
-  value, the encrypted ciphertext, the encryption key, the session token, the
-  password hash, or raw Jira bodies.
+  value, the encrypted ciphertext, the encryption key, the API-key plaintext,
+  the password hash, or raw Jira bodies.
 - The DOM does not retain the Jira token or login password after submission.
 - `git status` shows no `.env`, cookie jars, or saved keys staged.
-- The database stores only safe values:
+- The database stores only safe values — in particular, the `sessions` table
+  stores only the SHA-256 hash of each token, never the raw token:
 
   ```bash
   sqlite3 apps/api/data/app.db \

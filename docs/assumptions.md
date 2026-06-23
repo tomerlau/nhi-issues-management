@@ -19,6 +19,14 @@ resulting tradeoffs. Behavior already described elsewhere
 - **npm workspaces with simple root scripts.** *Production alternative*: Nx or
   Turborepo for caching and task orchestration. *Tradeoff*: lower setup
   complexity at the cost of advanced orchestration.
+- **Local setup auto-generates and persists the Jira credential-encryption key
+  in a git-ignored environment file.** `npm run setup` writes the key to
+  `apps/api/.env` only when one is not already present and valid; it never
+  prints the value. *Production alternative*: managed secret provisioning and
+  KMS-backed envelope encryption with rotation. *Tradeoff*: minimal reviewer
+  setup, but the key lifecycle is tied to the local filesystem — losing the
+  file makes existing encrypted Jira credentials undecryptable, forcing
+  reconnection.
 
 ## Persistence
 

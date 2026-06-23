@@ -46,7 +46,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ['.claude/hooks/**/*.mjs'],
+    files: ['.claude/hooks/**/*.mjs', 'scripts/**/*.mjs'],
     languageOptions: {
       globals: { ...globals.node },
     },

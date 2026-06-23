@@ -27,17 +27,18 @@ Requirements: Node.js 24 (`.nvmrc`) and npm 10+.
 ```bash
 nvm use            # or otherwise ensure Node.js 24 is active
 npm ci
-cp apps/api/.env.example apps/api/.env   # then fill in JIRA_CREDENTIAL_ENCRYPTION_KEY
-npm run seed       # apply migrations and insert demo tenants/users
+npm run setup      # create apps/api/.env, generate the Jira key, migrate and seed
 npm run dev        # start API on :3001 and web on :5173
 ```
 
 Open <http://localhost:5173> and sign in with one of the demo accounts below.
 
-Without `JIRA_CREDENTIAL_ENCRYPTION_KEY` set, login and the rest of the app
-still work; only the Jira connection endpoints return HTTP 503
-`jira_not_configured`. See [docs/setup.md](docs/setup.md) for the full setup,
-including how to generate an encryption key.
+`npm run setup` is idempotent: it creates the git-ignored `apps/api/.env` from
+the example, fills `JIRA_CREDENTIAL_ENCRYPTION_KEY` with a freshly generated
+32-byte value only when it is missing or empty, never overwrites a valid
+existing key, and never prints the key value. Without that key, Jira-dependent
+operations are unavailable and return HTTP 503 `jira_not_configured`. See
+[docs/setup.md](docs/setup.md) for the full setup.
 
 ## Demo users
 
@@ -57,14 +58,15 @@ Run from the repository root.
 
 | Command                                       | Purpose                                            |
 | --------------------------------------------- | -------------------------------------------------- |
+| `npm run setup`                               | Create the git-ignored `apps/api/.env`, generate the Jira encryption key when missing, then migrate and seed. |
 | `npm run dev`                                 | Run API (`:3001`) and web (`:5173`) together.      |
 | `npm run migrate`                             | Apply pending SQL migrations.                      |
 | `npm run seed`                                | Migrate, then insert demo tenants/users (idempotent). |
 | `npm run lint`                                | ESLint across the repo.                            |
 | `npm run typecheck`                           | TypeScript strict typecheck for both apps.         |
-| `npm test`                                    | Vitest unit tests for both apps.                   |
+| `npm test`                                    | Backend and frontend Vitest test suites.           |
 | `npm run build`                               | Build backend and frontend.                        |
-| `npm run check`                               | Canonical quality gate: lint, typecheck, tests, workflow-hook tests, build. |
+| `npm run check`                               | Canonical quality gate: lint, typecheck, tests, workflow-hook tests, setup tests, build. |
 | `npm run api-key:create --workspace apps/api -- --email <email>` | Provision an API key for a user.   |
 | `npm run api-key:revoke --workspace apps/api -- --key-id <id>`   | Revoke an API key.                |
 
