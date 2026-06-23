@@ -217,14 +217,13 @@ deferred to avoid late-stage regressions.
   paths therefore have meaningfully different CPU cost.
 - **Possible risk.** This creates a *coarse timing difference* that could
   theoretically assist user enumeration if a determined caller can measure
-  many requests carefully. It is not a constant-time authentication path,
-  and the authentication path is therefore not constant-time
+  many requests carefully. The authentication path is therefore not constant-time.
 - **Production hardening alternative.** Use a single fixed, valid Argon2id
   *dummy* hash. On every validly shaped login attempt, select either the
   real stored hash (when the user and credential exist) or the dummy hash
   (when they do not) and perform exactly one `verifyPassword` call. The
   generic `invalid_credentials` response is preserved unchanged on failure.
-- **Status.** Documented but not implemented in this time-boxed POC 
+- **Status.** Not implemented in this time-boxed POC 
   to avoid introducing late-stage authentication regressions.
 
 ### Local API network binding
@@ -237,12 +236,12 @@ deferred to avoid late-stage regressions.
   frontend at `http://localhost:5173` and the `/api` dev proxy.
 - **Possible risk.** Depending on host configuration, the unauthenticated
   health endpoint and the authenticated API routes may be reachable from
-  other devices on the local network.The session cookie
+  other devices on the local network. The session cookie
   and API-key checks still enforce authentication; the concern is exposure
   surface, not authorization bypass.
 - **Production / local-hardening alternative.** Bind explicitly to
   `127.0.0.1` for local-only execution, and/or enforce the intended
   network boundary at a higher layer (container networking, host firewall
   rules, or production ingress configuration that fronts the API).
-- **Status.** Documented but not implemented in this time-boxed to avoid
-  setup and cross-platform regressions in the submission.
+- **Status.** Not implemented in this time-boxed POC; explicit loopback
+  binding is recommended before production use.

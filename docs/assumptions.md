@@ -75,10 +75,9 @@ resulting tradeoffs. Behavior already described elsewhere
 ## Jira connection
 
 - **API-token connection (unscoped Atlassian API token).** OAuth 2.0 Authorization
-  Code Flow (3LO) would be the preferred production approach, but a manually
-  generated unscoped Atlassian API token was used for this time-boxed POC
-  to keep the implementation and local setup focused; the simpler
-  API token was chosen. *Production alternative*: Atlassian OAuth 2.0
+  Code Flow (3LO) would be the preferred production approach. For this time-boxed POC,
+  a manually generated unscoped Atlassian API token was selected to reduce
+  implementation and local setup complexity. *Production alternative*: Atlassian OAuth 2.0
   Authorization Code Flow (3LO) with refresh tokens. *Tradeoff*: significantly
   reduced setup and implementation complexity; the application receives and
   retains a manually provisioned long-lived credential.
