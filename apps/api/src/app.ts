@@ -10,6 +10,7 @@ import { createAuthRouter } from './auth/auth-routes.js';
 import { internalError, invalidRequestError } from './auth/errors.js';
 import { createJiraRouter } from './jira/jira-routes.js';
 import { createTicketRouter } from './jira/ticket-routes.js';
+import { createExternalTicketRouter } from './jira/external-ticket-routes.js';
 import type { FetchLike } from './jira/jira-verifier.js';
 
 export interface JiraAppOptions {
@@ -52,7 +53,8 @@ function isCredentialBearingPath(path: string): boolean {
   return (
     path.startsWith('/api/auth') ||
     path.startsWith('/api/jira') ||
-    path.startsWith('/api/tickets')
+    path.startsWith('/api/tickets') ||
+    path.startsWith('/api/v1/tickets')
   );
 }
 
@@ -97,6 +99,16 @@ export function createApp(db: DatabaseSync, options: AppOptions = {}): Express {
     createTicketRouter({
       db,
       authService,
+      encryptionKey: jiraEncryptionKey,
+      fetch: jiraFetch,
+      timeoutMs: jiraTimeoutMs,
+    }),
+  );
+
+  app.use(
+    '/api/v1/tickets',
+    createExternalTicketRouter({
+      db,
       encryptionKey: jiraEncryptionKey,
       fetch: jiraFetch,
       timeoutMs: jiraTimeoutMs,

@@ -1,7 +1,7 @@
 # Architecture
 
 This document describes the architecture that currently exists through
-Milestone 12. It intentionally avoids designing later domain layers in detail.
+Milestone 13. It intentionally avoids designing later domain layers in detail.
 
 ## Monorepo structure
 
@@ -1234,3 +1234,63 @@ provisioning endpoint in M12; all provisioning is through these two scripts.
   — calls `ApiKeyService.revoke(keyId)` and physically deletes the row. Missing or
   empty `--key-id` exits non-zero. An already-absent key ID exits 0 and reports that
   no row was found (idempotent — no tombstone, no failure).
+
+## External ticket REST API (Milestone 13)
+
+Milestone 13 adds one external-facing REST endpoint — `POST /api/v1/tickets` —
+that lets external systems create NHI finding Jira tickets using an
+application-issued API key. It builds directly on the M12 authentication
+infrastructure and the M8 ticket-creation domain service without duplicating any
+ticket-creation logic.
+
+### Shared validation and result mapping
+
+The ticket request validation that previously lived inline in `ticket-routes.ts`
+is extracted into `ticket-validation.ts`, a focused shared module that exports
+`validateTicketBody`. Both the session-authenticated route (`/api/tickets`) and
+the API-key-authenticated route (`/api/v1/tickets`) import from it, so the same
+validation rules — `projectKey` trimming and uppercase normalization,
+2–10-character syntax check, non-empty bounded `title` ≤ 255 and `description`
+≤ 5000 with internal line breaks preserved — apply on both paths. Similarly,
+`ticket-result-mapper.ts` exports `sendCreateTicketResponse`, which maps a
+`CreateTicketResult` to the same HTTP status codes and error envelopes on both
+routes, making outcomes consistent by construction rather than by convention.
+
+### External ticket router
+
+`external-ticket-routes.ts` is a focused Express router mounted at
+`/api/v1/tickets`. It:
+
+- Sets `Cache-Control: no-store` on every response before any route handler runs.
+- Runs `createRequireApiKeyAuth` before exposing any Jira configuration or
+  connection state. Session cookies are not accepted; a request without a valid
+  `Authorization: Bearer <key>` header returns `401 Unauthenticated` before any
+  Jira operation.
+- Calls `validateTicketBody` from the shared module to enforce the same
+  three-field domain validation as the UI route. Any extra fields in the body
+  (including `tenantId`, `userId`, `connectionId`, `siteUrl`, and similar) are
+  ignored.
+- Delegates to the existing `TicketService.createTicket` with the `AuthContext`
+  resolved from the stored API-key record, then maps the result via
+  `sendCreateTicketResponse`.
+
+There is no second ticket-creation domain service, no second Jira client, and no
+second provenance repository. The external route is purely a new authentication
+boundary and router that reuses all existing M7–M8 infrastructure.
+
+### Trust boundary
+
+Ownership derives exclusively from the stored API-key record (see M12
+`ApiKeyService.authenticate`). No request input — body fields, query parameters,
+path segments, or additional headers — can change the resolved `tenantId` or
+`userId`. The provenance row always records the API-key owner's tenant and user.
+An API key from tenant A never uses tenant B's Jira connection or provenance,
+even when another connection ID, site URL, or user is known.
+
+### App mounting and error handling
+
+`app.ts` mounts the external router at `/api/v1/tickets` alongside the existing
+`/api/tickets` session router. The `isCredentialBearingPath` guard is extended
+to include `/api/v1/tickets`, so the body-parser error handler and the terminal
+error handler both set `Cache-Control: no-store` on error responses for this
+path. The existing `/api/tickets` session contract is unchanged.
