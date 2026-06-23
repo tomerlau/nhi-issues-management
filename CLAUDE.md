@@ -15,7 +15,8 @@ An npm-workspaces monorepo with a clear frontend/backend separation:
 
 - `apps/api` — Express + TypeScript backend.
 - `apps/web` — React + Vite + TypeScript frontend.
-- `docs/` — `architecture.md` and `assumptions.md`.
+- `docs/` — product documentation (`setup.md`, `architecture.md`, `api.md`,
+  `security.md`, `assumptions.md`, `manual-validation.md`).
 
 The frontend and backend are separate applications. The frontend talks to the
 backend only over relative `/api` requests via the Vite dev proxy.
