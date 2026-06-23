@@ -151,8 +151,7 @@ button.secondary {
 .app-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
+  gap: 1.25rem;
   padding: 0.75rem 1.5rem;
   background: var(--color-surface);
   border-bottom: 1px solid var(--color-border);
@@ -164,17 +163,11 @@ button.secondary {
   font-size: 1rem;
 }
 
-.app-header-right {
-  display: flex;
-  align-items: center;
-  gap: 1.25rem;
-  flex-wrap: wrap;
-}
-
 .app-user {
   display: flex;
   align-items: center;
   gap: 0.75rem;
+  margin-left: auto;
 }
 
 .app-user .user-name {
@@ -244,7 +237,7 @@ button.secondary {
 
 .jira-gear-button {
   background: transparent;
-  border: 1px solid var(--color-border);
+  border: none;
   color: var(--color-muted);
   padding: 0.2rem 0.4rem;
   font-size: 0.9rem;
@@ -257,9 +250,10 @@ button.secondary {
   font-weight: 400;
 }
 
-.jira-gear-button:hover {
+.jira-gear-button:hover,
+.jira-gear-button:active {
   color: var(--color-text);
-  border-color: var(--color-muted);
+  background: var(--color-bg);
 }
 
 /* --------------------------------------------------------------------------
@@ -299,10 +293,57 @@ button.secondary {
   max-width: 24rem;
 }
 
-.no-project-prompt {
-  margin-top: 1.5rem;
+/* --------------------------------------------------------------------------
+   Project selector — label row with info icon and tooltip
+   -------------------------------------------------------------------------- */
+
+.field-label-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.tooltip-anchor {
+  position: relative;
+  display: inline-flex;
+}
+
+.info-icon {
+  background: transparent;
+  border: none;
+  padding: 0;
   color: var(--color-muted);
-  font-size: 0.95rem;
+  font-size: 0;
+  line-height: 1;
+  font-weight: 400;
+  cursor: default;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+}
+
+.info-icon:hover,
+.info-icon:focus-visible {
+  color: var(--color-text);
+}
+
+.tooltip-text {
+  position: absolute;
+  left: 50%;
+  top: calc(100% + 0.4rem);
+  transform: translateX(-50%);
+  background: var(--color-text);
+  color: var(--color-surface);
+  font-size: 0.8rem;
+  font-weight: 400;
+  padding: 0.35rem 0.6rem;
+  border-radius: 0.3rem;
+  white-space: nowrap;
+  z-index: 10;
+  pointer-events: none;
+  max-width: min(22rem, calc(100vw - 2rem));
+  white-space: normal;
 }
 
 /* --------------------------------------------------------------------------
@@ -593,11 +634,8 @@ button.secondary {
     gap: 0.75rem;
   }
 
-  .app-header-right {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0.75rem;
-    width: 100%;
+  .app-user {
+    margin-left: 0;
   }
 
   .app-main {

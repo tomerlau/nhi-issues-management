@@ -928,11 +928,13 @@ displayed values solely from the validated API response.
 
 `src/components/ProjectSelector.tsx` is a new standalone component rendered in
 the main content area when the tenant is Jira-connected. It shows a "Jira
-project" label, a single text input, and a "Used for recent tickets and new
-ticket creation." hint. A validation error (`role="alert"`) appears only for
-non-empty, invalid keys — an empty value is always silent. The component is not
-inside any form element; it is wired directly into `AuthenticatedShell` via an
-`onChange` prop.
+project" label with an inline information icon, and a single text input. The
+information icon shows a tooltip ("Enter a Jira project key to view or create
+tickets.") on hover and keyboard focus; it has `aria-label="About the project
+key"` and `role="tooltip"` on the tooltip span. No persistent helper sentence is
+rendered. A validation error (`role="alert"`) appears only for non-empty, invalid
+keys — an empty value is always silent. The component is not inside any form
+element; it is wired directly into `AuthenticatedShell` via an `onChange` prop.
 
 ### Shared project-key state and shell layout
 
@@ -975,9 +977,9 @@ When `jiraState.status === 'connected'` the shell renders:
 2. `ProjectSelector` in the main area, **disabled** while
    `creationModalOpen || ticketCreationSubmitting`. This prevents the project
    from changing while a non-idempotent ticket-creation request is in flight or
-   the modal is open.
-3. A no-project prompt **or** `RecentTicketsPanel`, gated on whether the
-   normalized key is valid.
+   the modal is open. When no valid project key is entered, only the selector
+   and its inline tooltip icon are shown — no standalone prompt paragraph.
+3. `RecentTicketsPanel`, rendered only when the normalized key is valid.
 4. `TicketCreationModal` (rendered outside the flow, always present while
    Jira-connected, shown/hidden via the `open` prop).
 
@@ -1078,7 +1080,7 @@ discriminated union:
 { type: 'prompt' } | { type: 'loading' } | { type: 'success'; tickets } | { type: 'error'; kind }
 ```
 
-The `prompt` state returns `null` — the shell shows a no-project prompt itself.
+The `prompt` state returns `null` — the shell shows only the `ProjectSelector` with its tooltip icon.
 The `loading` and `error` states render a panel div without any heading. The
 `success` state has two distinct modes determined solely by `tickets.length`:
 
@@ -1106,8 +1108,8 @@ checks in `.then`/`.catch` handlers.
 AuthenticatedShell (projectKey, refreshKey, creationModalOpen, ticketCreationSubmitting, jiraState, jiraRefreshSignal, createTicketTriggerRef)
   |-> JiraConnectionPanel (header: red/green dot; gear button when connected; onStatusChange; externalRefreshSignal)
   |-> [disconnected] JiraInlineConnectForm -> POST /api/jira/connection -> setJiraState(connected) + jiraRefreshSignal++ -> re-fetch
-  |-> [connected] ProjectSelector (disabled while creationModalOpen || ticketCreationSubmitting)
-  |-> [connected] RecentTicketsPanel (projectKey, refreshKey, onOpenCreationModal, onTicketCreated, triggerRef, onSubmittingChange)
+  |-> [connected] ProjectSelector (disabled while creationModalOpen || ticketCreationSubmitting; info icon tooltip when no valid key)
+  |-> [connected + valid key] RecentTicketsPanel (projectKey, refreshKey, onOpenCreationModal, onTicketCreated, triggerRef, onSubmittingChange)
   |     Mode A: list + "Create ticket" (ref=triggerRef) -> opens TicketCreationModal
   |     Mode B: TicketCreationForm (onSubmittingChange) -> POST /api/tickets -> onTicketCreated -> refreshKey++
   |     Error: safe copy + Retry

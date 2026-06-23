@@ -272,8 +272,8 @@ Implemented:
     Jira ticket!" panel with an intro paragraph and a `TicketCreationForm`.
     No "Recent tickets" heading, ticket list, or empty-state text.
   - **Prompt / loading / error states** are unchanged from the previous
-    implementation. `prompt` returns `null` (the shell shows a no-project
-    prompt instead).
+    implementation. `prompt` returns `null` (the shell shows only the
+    `ProjectSelector` with its tooltip icon — no standalone prompt paragraph).
 - **A reusable `TicketCreationForm` component**
   (`apps/web/src/components/TicketCreationForm.tsx`). Accepts `projectKey`
   (for the API call and a read-only "Creating in project …" context display),
@@ -303,8 +303,8 @@ Implemented:
   updates cannot demote a confirmed connection). `JiraInlineConnectForm` is only
   shown in the `disconnected` state. The header shows: product name, Jira status
   bar, user email, and sign-out — the user display name is not rendered. When
-  connected: `ProjectSelector` → no-project prompt or `RecentTicketsPanel` →
-  `TicketCreationModal`. `ProjectSelector` is disabled while
+  connected: `ProjectSelector` (with tooltip icon) → `RecentTicketsPanel` (when
+  valid key) → `TicketCreationModal`. `ProjectSelector` is disabled while
   `creationModalOpen || ticketCreationSubmitting`.
 - **Debounced project-key changes, immediate abort, stale-response prevention,
   and refresh-key triggers** — all unchanged from the prior milestone:
@@ -317,8 +317,10 @@ Implemented:
   non-empty string fields, a valid ISO timestamp, and a safe Atlassian URL.
   `AbortError` is propagated raw. Raw backend messages are always discarded.
 - **Frontend tests** (Vitest + React Testing Library): `ProjectSelector`
-  (13 tests: label, helper text, value, outside-form guard, onChange, validation
-  error rules including lowercase normalisation copy, disabled state),
+  (22 tests: label, absent helper text, value, outside-form guard, onChange,
+  validation error rules including lowercase normalisation copy, disabled state,
+  info icon presence and accessible name, keyboard focusability, tooltip
+  show/hide on hover and focus, tooltip text, tooltip dismiss on leave/blur),
   `RecentTicketsPanel` (42 tests: prompt/loading/error states, Mode A and Mode B
   rendering, onOpenCreationModal and onTicketCreated callbacks, Mode B → Mode A
   transition, stale-response prevention), `JiraConnectionPanel` (48 tests:
@@ -328,7 +330,8 @@ Implemented:
   onStatusChange callback — loading/disconnected/connected/error), `TicketCreationForm`
   (29 tests: form fields, no project-key input, project context display, validation,
   API call, error mapping, uncertain outcomes, onSubmittingChange callback), and
-  `App.test.tsx` integration suite (76 tests including header content, disconnected
+  `App.test.tsx` integration suite (78 tests including header content — DOM
+  order of Jira status before user controls, gear button class — disconnected
   Jira inline form, Jira status resilience (GET error vs. disconnected, Retry
   behaviors, POST-first immediate transition, POST+GET-failure resilience), compact
   Jira bar, Mode A and Mode B, Mode B-to-Mode A transition, Mode A modal behaviour —

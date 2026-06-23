@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import ProjectSelector from '../src/components/ProjectSelector';
 
@@ -13,10 +13,10 @@ describe('rendering', () => {
     expect(screen.getByLabelText(/jira project/i)).toBeInTheDocument();
   });
 
-  it('renders the "Used for recent tickets" helper text', () => {
+  it('does not render the persistent helper text', () => {
     render(<ProjectSelector value="" onChange={vi.fn()} />);
 
-    expect(screen.getByText(/used for recent tickets and new ticket creation/i)).toBeInTheDocument();
+    expect(screen.queryByText(/used for recent tickets and new ticket creation/i)).not.toBeInTheDocument();
   });
 
   it('reflects the current value', () => {
@@ -93,5 +93,86 @@ describe('disabled state', () => {
     render(<ProjectSelector value="SCRUM" onChange={vi.fn()} disabled />);
 
     expect(screen.getByLabelText(/jira project/i)).toBeDisabled();
+  });
+});
+
+describe('info icon and tooltip', () => {
+  it('renders an info icon button next to the "Jira project" label', () => {
+    render(<ProjectSelector value="" onChange={vi.fn()} />);
+
+    expect(screen.getByRole('button', { name: /about the project key/i })).toBeInTheDocument();
+  });
+
+  it('info icon has an accessible name', () => {
+    render(<ProjectSelector value="" onChange={vi.fn()} />);
+
+    const icon = screen.getByRole('button', { name: /about the project key/i });
+    expect(icon).toHaveAccessibleName();
+  });
+
+  it('info icon is keyboard focusable', () => {
+    render(<ProjectSelector value="" onChange={vi.fn()} />);
+
+    const icon = screen.getByRole('button', { name: /about the project key/i });
+    expect(icon).not.toBeDisabled();
+    icon.focus();
+    expect(document.activeElement).toBe(icon);
+  });
+
+  it('tooltip is not visible initially', () => {
+    render(<ProjectSelector value="" onChange={vi.fn()} />);
+
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+  });
+
+  it('tooltip appears on mouse hover', async () => {
+    render(<ProjectSelector value="" onChange={vi.fn()} />);
+
+    const icon = screen.getByRole('button', { name: /about the project key/i });
+    await act(async () => { fireEvent.mouseEnter(icon); });
+
+    expect(screen.getByRole('tooltip')).toBeInTheDocument();
+  });
+
+  it('tooltip appears on keyboard focus', async () => {
+    render(<ProjectSelector value="" onChange={vi.fn()} />);
+
+    const icon = screen.getByRole('button', { name: /about the project key/i });
+    await act(async () => { fireEvent.focus(icon); });
+
+    expect(screen.getByRole('tooltip')).toBeInTheDocument();
+  });
+
+  it('tooltip contains the exact approved text', async () => {
+    render(<ProjectSelector value="" onChange={vi.fn()} />);
+
+    const icon = screen.getByRole('button', { name: /about the project key/i });
+    await act(async () => { fireEvent.mouseEnter(icon); });
+
+    expect(screen.getByRole('tooltip')).toHaveTextContent(
+      'Enter a Jira project key to view or create tickets.',
+    );
+  });
+
+  it('tooltip hides after mouse leave', async () => {
+    render(<ProjectSelector value="" onChange={vi.fn()} />);
+
+    const icon = screen.getByRole('button', { name: /about the project key/i });
+    await act(async () => { fireEvent.mouseEnter(icon); });
+    expect(screen.getByRole('tooltip')).toBeInTheDocument();
+
+    await act(async () => { fireEvent.mouseLeave(icon); });
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+  });
+
+  it('tooltip hides after blur', async () => {
+    render(<ProjectSelector value="" onChange={vi.fn()} />);
+
+    const icon = screen.getByRole('button', { name: /about the project key/i });
+    await act(async () => { fireEvent.focus(icon); });
+    expect(screen.getByRole('tooltip')).toBeInTheDocument();
+
+    await act(async () => { fireEvent.blur(icon); });
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
   });
 });

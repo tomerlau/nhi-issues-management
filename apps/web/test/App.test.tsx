@@ -259,7 +259,7 @@ describe('project selector gating', () => {
     expect(screen.queryByLabelText(/jira project/i)).not.toBeInTheDocument();
   });
 
-  it('shows a prompt when no valid project key is entered', async () => {
+  it('shows the info icon and no standalone prompt when no valid project key is entered', async () => {
     mockedRestore.mockResolvedValue(alice);
     mockedGetJira.mockResolvedValue({
       connected: true,
@@ -270,7 +270,8 @@ describe('project selector gating', () => {
     render(<App />);
     await screen.findByLabelText(/jira project/i);
 
-    expect(screen.getByText(/enter a jira project key/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /about the project key/i })).toBeInTheDocument();
+    expect(screen.queryByText(/enter a jira project key to view or create tickets/i)).not.toBeInTheDocument();
     expect(mockedListRecentTickets).not.toHaveBeenCalled();
   });
 
@@ -1068,6 +1069,36 @@ describe('header content', () => {
 
     expect(document.querySelector('.jira-indicator-disconnected')).toBeInTheDocument();
     expect(document.querySelector('.jira-indicator-connected')).not.toBeInTheDocument();
+  });
+
+  it('renders Jira status before user email in DOM order', async () => {
+    mockedRestore.mockResolvedValue(alice);
+    mockedGetJira.mockResolvedValue({
+      connected: true,
+      siteUrl: 'https://acme.atlassian.net',
+      email: 'alice@example.com',
+    });
+    render(<App />);
+    await screen.findByRole('button', { name: /manage jira connection/i });
+
+    const gearBtn = screen.getByRole('button', { name: /manage jira connection/i });
+    const emailEl = screen.getByText('alice@example.com');
+    expect(
+      gearBtn.compareDocumentPosition(emailEl) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('gear button has the jira-gear-button class', async () => {
+    mockedRestore.mockResolvedValue(alice);
+    mockedGetJira.mockResolvedValue({
+      connected: true,
+      siteUrl: 'https://acme.atlassian.net',
+      email: 'alice@example.com',
+    });
+    render(<App />);
+    await screen.findByRole('button', { name: /manage jira connection/i });
+
+    expect(screen.getByRole('button', { name: /manage jira connection/i })).toHaveClass('jira-gear-button');
   });
 });
 

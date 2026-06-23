@@ -123,18 +123,16 @@ export default function AuthenticatedShell({ user, onLoggedOut }: AuthenticatedS
     <div className="app-shell">
       <header className="app-header">
         <span className="app-name">NHI Issues Management</span>
-        <div className="app-header-right">
-          <JiraConnectionPanel
-            onStatusChange={handleJiraStatusChange}
-            onConnectionSaved={handleConnectionSaved}
-            externalRefreshSignal={jiraRefreshSignal}
-          />
-          <div className="app-user">
-            <span className="user-email">{user.email}</span>
-            <button type="button" onClick={handleLogout} disabled={loggingOut}>
-              {loggingOut ? 'Signing out…' : 'Sign out'}
-            </button>
-          </div>
+        <JiraConnectionPanel
+          onStatusChange={handleJiraStatusChange}
+          onConnectionSaved={handleConnectionSaved}
+          externalRefreshSignal={jiraRefreshSignal}
+        />
+        <div className="app-user">
+          <span className="user-email">{user.email}</span>
+          <button type="button" onClick={handleLogout} disabled={loggingOut}>
+            {loggingOut ? 'Signing out…' : 'Sign out'}
+          </button>
         </div>
       </header>
 
@@ -159,11 +157,7 @@ export default function AuthenticatedShell({ user, onLoggedOut }: AuthenticatedS
               disabled={creationModalOpen || ticketCreationSubmitting}
             />
 
-            {!hasValidProject ? (
-              <p className="no-project-prompt">
-                Enter a Jira project key to view or create tickets.
-              </p>
-            ) : (
+            {hasValidProject && (
               <RecentTicketsPanel
                 projectKey={projectKey}
                 refreshKey={refreshKey}
