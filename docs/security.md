@@ -199,3 +199,50 @@ The Jira HTTP client targets only the already-validated direct
 
 See [assumptions.md](assumptions.md) for the full list of POC assumptions and
 tradeoffs.
+
+## Known POC security limitations
+
+Two hardening items were considered for this submission and intentionally
+deferred to avoid late-stage regressions. They are recorded here so a
+reviewer or successor can pick them up.
+
+### Login timing differences
+
+- **Current behavior.** Invalid login attempts return the same generic API
+  response (`HTTP 401 invalid_credentials`) and the response itself does not
+  disclose whether a user exists. However, an unknown email or a missing
+  credential row can short-circuit before any Argon2 verification runs,
+  while an existing credential always performs Argon2 verification. The two
+  paths therefore have meaningfully different CPU cost.
+- **Possible risk.** This creates a *coarse timing difference* that could
+  theoretically assist user enumeration if a determined caller can measure
+  many requests carefully. It is not a constant-time authentication path,
+  and the POC does not claim to be one.
+- **Production hardening alternative.** Use a single fixed, valid Argon2id
+  *dummy* hash. On every validly shaped login attempt, select either the
+  real stored hash (when the user and credential exist) or the dummy hash
+  (when they do not) and perform exactly one `verifyPassword` call. The
+  generic `invalid_credentials` response is preserved unchanged on failure.
+- **Status.** Documented but **intentionally not implemented** in this
+  submission to avoid introducing late-stage authentication regressions.
+
+### Local API network binding
+
+- **Current behavior.** The local Express process calls
+  `app.listen(3001, …)` without an explicit host argument. Depending on
+  the operating system and firewall configuration, Node may bind the
+  socket on all available network interfaces rather than only on the
+  loopback address. Normal browser usage still goes through the Vite
+  frontend at `http://localhost:5173` and the `/api` dev proxy.
+- **Possible risk.** Depending on host configuration, the unauthenticated
+  health endpoint and the authenticated API routes may be reachable from
+  the local network (not from the public internet). The session cookie
+  and API-key checks still enforce authentication; the concern is exposure
+  surface, not authorization bypass.
+- **Production / local-hardening alternative.** Bind explicitly to
+  `127.0.0.1` for local-only execution, and/or enforce the intended
+  network boundary at a higher layer (container networking, host firewall
+  rules, or production ingress configuration that fronts the API).
+- **Status.** Documented but **intentionally not implemented** at this
+  late stage to avoid setup and cross-platform regressions in the
+  submission.

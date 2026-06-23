@@ -37,12 +37,13 @@ npm run dev        # start API on :3001 and web on :5173
 
 Open <http://localhost:5173> and sign in with one of the demo accounts below.
 
-`npm run setup` is idempotent: it creates the git-ignored `apps/api/.env` from
-the example, fills `JIRA_CREDENTIAL_ENCRYPTION_KEY` with a freshly generated
-32-byte value only when it is missing or empty, never overwrites a valid
-existing key, and never prints the key value. Without that key, Jira-dependent
-operations are unavailable and return HTTP 503 `jira_not_configured`. See
-[docs/setup.md](docs/setup.md) for the full setup.
+> **Setup behavior:** `npm run setup` is idempotent. It creates the
+> git-ignored `apps/api/.env` from the example, fills
+> `JIRA_CREDENTIAL_ENCRYPTION_KEY` with a freshly generated 32-byte value
+> only when it is missing or empty, never overwrites a valid existing key,
+> and never prints the key value. Without that key, Jira-dependent
+> operations return HTTP 503 `jira_not_configured`. See
+> [docs/setup.md](docs/setup.md) for the full setup.
 
 ## Demo users
 
@@ -66,7 +67,41 @@ hashes.
   for creating, listing, rotating, or revoking API keys. Keys are provisioned
   and revoked only through the local CLI commands
   (`npm run api-key:create` / `npm run api-key:revoke`).
+- **Jira project selection is a text input, not a discovery dropdown.** The
+  UI accepts a Jira project key in a validated text field. An ideal
+  production UX would discover the projects accessible through the connected
+  Atlassian account and present them in a searchable dropdown. That requires
+  additional Jira project-discovery calls, pagination, loading and error
+  states, and most likely caching, and was deliberately excluded from this
+  time-boxed POC.
+- **Unscoped Atlassian API tokens only.** The implementation supports only
+  direct, unscoped Atlassian API tokens authenticated against
+  `https://<site>.atlassian.net`. Scoped Atlassian API tokens require a
+  different Atlassian host and the cloud-id-based request model, which does
+  not match this POC's direct site-origin architecture. Scoped API tokens
+  and OAuth 2.0 Authorization Code Flow (3LO) are not implemented.
+- **Fixed Jira issue type.** Ticket creation supports only the Jira issue
+  type named exactly `Task`. Issue-type selection, project-specific schemas,
+  custom fields, and configurable field mappings are outside this POC.
 - **The optional NHI Blog Digest bonus is not implemented.**
+
+### Jira authentication choice
+
+The POC uses a manually generated Atlassian API token because it keeps local
+setup and reviewer validation straightforward: a single value pasted into
+the Jira connection form is enough to exercise the full integration.
+
+A production implementation would generally prefer **OAuth 2.0 Authorization
+Code Flow (3LO)**: it avoids asking the user to paste a long-lived
+credential, provides delegated authorization with user-visible scopes, and
+gives the application standard lifecycle hooks (refresh, revocation,
+expiry). Supporting 3LO requires registering an Atlassian OAuth
+application, managing client credentials, handling redirect URIs and
+consent, exchanging and refreshing access tokens, and securely storing the
+resulting token material. That work was intentionally excluded from this
+time-boxed POC. API-token authentication is not invalid or inherently
+insecure for this scope — it is a deliberate POC-versus-production
+tradeoff.
 
 See [docs/assumptions.md](docs/assumptions.md) for the full list of POC
 assumptions and production alternatives.
