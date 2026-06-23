@@ -2,8 +2,13 @@
 
 A focused proof of concept for integrating Oasis Security IdentityHub with Jira.
 
-This repository is built in milestones. The current milestone (Milestone 10)
-adds a backend-only recent-tickets read: an authenticated
+This repository is built in milestones. The current milestone (Milestone 12)
+adds application-issued API-key authentication: an `api_keys` table, key
+generation and verification, an Express middleware, and local CLI scripts to
+provision and revoke keys. It builds on the existing session-based
+authentication and AuthContext infrastructure.
+
+Milestone 10 added a backend-only recent-tickets read: an authenticated
 `GET /api/tickets?projectKey=...` endpoint that returns the ten most recent
 tickets created through this application for the tenant's currently connected
 Jira site and a selected project. Membership and order come from local

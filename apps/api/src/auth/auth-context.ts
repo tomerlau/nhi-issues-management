@@ -1,7 +1,7 @@
 /**
- * The authenticated principal, derived entirely from the server-side session.
- * userId and tenantId always come from the stored session record, never from
- * request input.
+ * The authenticated principal for a request. userId and tenantId are derived
+ * from a server-side authority — a session record or an API key record — and
+ * never from request input (body, headers, query parameters, or path segments).
  */
 export interface AuthContext {
   userId: string;
