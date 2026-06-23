@@ -981,7 +981,7 @@ Two CLI scripts provide local key management. There is no management UI and no R
 provisioning endpoint in M12; all provisioning is through these two scripts.
 
 - `api-key-create.ts` (`npm run api-key:create --workspace apps/api -- --email <email>`)
-  — validates the email address before any database access: trims input, requires
+  — validates the email address before the user lookup and API-key creation: trims input, requires
   exactly one `@`, a non-empty local part, a non-empty domain with at least one dot
   but no leading or trailing dot, no embedded whitespace, and at most 254 characters.
   A malformed or overlong address produces a format error that is distinct from a
