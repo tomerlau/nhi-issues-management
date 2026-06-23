@@ -11,7 +11,9 @@
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
     "migrate": "tsx src/database/migrate.ts",
-    "seed": "tsx src/database/seed.ts"
+    "seed": "tsx src/database/seed.ts",
+    "api-key:create": "node --disable-warning=ExperimentalWarning --import tsx/esm src/scripts/api-key-create.ts",
+    "api-key:revoke": "node --disable-warning=ExperimentalWarning --import tsx/esm src/scripts/api-key-revoke.ts"
   },
   "dependencies": {
     "argon2": "^0.44.0",

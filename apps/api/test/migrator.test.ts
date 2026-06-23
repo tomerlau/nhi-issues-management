@@ -53,6 +53,7 @@ describe('migration runner', () => {
       '005_jira_connection_v2_credentials.sql',
       '006_jira_ticket_provenance.sql',
       '007_jira_ticket_provenance_recent_index.sql',
+      '008_api_keys.sql',
     ]);
 
     const secondRun = runMigrations(db);
@@ -69,6 +70,7 @@ describe('migration runner', () => {
       '005_jira_connection_v2_credentials.sql',
       '006_jira_ticket_provenance.sql',
       '007_jira_ticket_provenance_recent_index.sql',
+      '008_api_keys.sql',
     ]);
     db.close();
   });

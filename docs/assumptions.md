@@ -1,7 +1,7 @@
 # Project Assumptions
 
 This document records the assumptions and tradeoffs relevant to the
-functionality implemented through the current milestone (Milestone 10). It grows
+functionality implemented through the current milestone (Milestone 12). It grows
 cumulatively as later milestones add functionality.
 
 ## Scope
@@ -31,6 +31,9 @@ cumulatively as later milestones add functionality.
   tickets created through this application for the tenant's currently connected
   Jira site and a selected project, with membership and order from local
   provenance and every displayed value hydrated live from Jira.
+- Milestone 12 adds application-issued API-key authentication: an `api_keys`
+  table, key generation and verification, authentication middleware, and local
+  CLI provisioning and revocation commands.
 - The optional blog digest is not part of the current implementation.
 
 ## Frontend
@@ -521,3 +524,48 @@ cumulatively as later milestones add functionality.
   limits, sorting, or filtering beyond the single `projectKey`; full-text search or
   Jira project discovery; caching or background refresh of hydrated issues; editing,
   deleting, or transitioning issues; and Jira Server / Data Center support.
+
+## API-key authentication (Milestone 12)
+
+- **API keys are owned by one application user and tenant.** Ownership is stored at
+  creation time and derived only from stored key metadata on each request. Request
+  input (headers, body, query, path) cannot override it.
+- **Keys use random high-entropy secrets and hash-only storage.** Each key has a
+  16-byte random public ID (base64url, 22 chars) and a 32-byte random secret
+  (base64url, 43 chars, ≥ 256 bits of entropy). Only the SHA-256 hash of the secret
+  is persisted. The plaintext full key is shown exactly once during local
+  provisioning and cannot be recovered.
+- **Key format: `nhi_<keyId>.<secret>`.** `.` is not in the base64url alphabet, so
+  the format is unambiguous regardless of base64url characters in the components.
+- **Plaintext is shown only during local provisioning.** The create CLI prints the
+  full key exactly once with a clear warning that it cannot be retrieved again.
+  Success exits with code 0; any argument or validation failure exits with a non-zero
+  code.
+- **The create CLI validates email format before the database lookup.** Input is
+  trimmed; the validator requires exactly one `@`, a non-empty local part, a
+  non-empty domain containing at least one dot but no dot at the start or end of the
+  domain, no internal whitespace, and a maximum length of 254 characters. A malformed
+  or overlong address produces a format error that is intentionally distinct from a
+  user-not-found error, so callers can tell the two apart without ambiguity.
+- **The POC has no automatic expiration or rotation.** Keys remain valid until
+  explicitly revoked. Production alternatives include time-bounded tokens, automatic
+  rotation, last-used tracking, and administrative key management.
+- **Revocation physically deletes the record; no revocation history is retained.**
+  After revocation, the key ID is permanently indistinguishable from an unknown key,
+  and no tombstone, `revoked_at` value, secret hash, or audit history is kept.
+- **Revocation is idempotent.** Revoking a key ID that has already been removed or
+  was never created exits with code 0 and reports that no row was found, rather than
+  failing. There is no tombstone: after revocation the key ID is indistinguishable
+  from a key that never existed.
+- **No API-key management UI or REST provisioning endpoints in M12.** Keys are
+  created and revoked only through the two local CLI scripts. The management UI and
+  REST endpoints are deferred to a later milestone.
+- **No external ticket REST endpoint in M12.** M13 will add the external ticket
+  creation endpoint that uses API-key authentication. M12 only provides the
+  authentication infrastructure.
+- **Production alternatives:** expiration and automatic rotation; audit history and
+  last-used tracking; managed key administration UI; rate limiting and scoped
+  permissions per key; dedicated secrets management service.
+- **Deferred:** API-key management UI, create/revoke REST endpoints, external ticket
+  endpoint (M13), caller-selected tenant/user, key listing, `revoked_at`/soft-delete,
+  expiration, rotation, `last_used_at`, roles/administrator model.
