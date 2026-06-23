@@ -105,7 +105,121 @@ scoped API-token support; roles, permissions, or tenant-admin UI; API-key
 functionality; browser credential persistence; global frontend state; and
 routing.
 
-## Current milestone scope (Milestone 10: Recent tickets backend)
+## Current milestone scope (Milestone 12: API-key authentication)
+
+Backend only. Milestone 12 adds application-issued API-key authentication: an
+`api_keys` table, key generation and timing-safe verification, an Express
+authentication middleware, and local CLI scripts to provision and revoke keys.
+No external REST endpoints are added; the middleware is tested via a test-only
+route. No API-key management UI is included.
+
+### api_keys table
+
+The migration `008_api_keys.sql` creates a SQLite `STRICT` table with columns:
+
+| Column        | Type | Notes                                                        |
+| ------------- | ---- | ------------------------------------------------------------ |
+| `id`          | TEXT | Public key selector (16 random bytes, base64url, 22 chars). Primary key. |
+| `tenant_id`   | TEXT | Owning tenant.                                               |
+| `user_id`     | TEXT | Owning user within the tenant.                               |
+| `secret_hash` | TEXT | SHA-256 hash of the secret component. Never the plaintext.  |
+| `created_at`  | TEXT | ISO 8601 timestamp.                                          |
+
+A composite `FOREIGN KEY (tenant_id, user_id)` references `users(tenant_id, id)`,
+keeping every row tenant-safe. There is no `revoked_at` column; revocation
+physically deletes the row.
+
+### Key format
+
+Keys follow the format `nhi_<keyId>.<secret>`:
+
+- `keyId` — 16 random bytes encoded as base64url (22 characters). This is the
+  public selector stored in `api_keys.id` and used to look up the row.
+- `secret` — 32 random bytes encoded as base64url (43 characters, ≥ 256 bits of
+  entropy). Only its SHA-256 hash is stored; the plaintext is never persisted.
+- `.` is the separator. Because `.` is not in the base64url alphabet
+  (`A-Z a-z 0-9 - _`), the format is unambiguous regardless of the characters in
+  the two base64url components.
+
+SHA-256 of the secret is the only value ever written to the database. The full
+plaintext key is shown exactly once during local provisioning and cannot be
+recovered afterwards.
+
+### Authentication middleware
+
+`createRequireApiKeyAuth` reads the `Authorization: Bearer <api-key>` header.
+It parses the key, looks up the record by `keyId`, and performs a timing-safe
+comparison of the SHA-256 hash. All failures — missing header, wrong scheme,
+malformed format, unknown ID, wrong secret, deleted key — return the same
+`401 Unauthenticated` with `Cache-Control: no-store`. No information about the
+reason for failure is disclosed.
+
+On success the middleware populates `req.auth.context` with the same `AuthContext`
+shape used by session authentication. Ownership derives exclusively from the
+stored key record; request headers, bodies, query parameters, and path parameters
+cannot override the `tenantId` or `userId`.
+
+### ApiKeyRepository and ApiKeyService
+
+`ApiKeyRepository` exposes `create`, `findById` (unscoped — the key ID is the
+trusted selector), and `deleteById`. `ApiKeyService` exposes:
+
+- `create(tenantId, userId)` — generates the key, hashes the secret, persists
+  only the hash and metadata, and returns the `fullKey` exactly once.
+- `authenticate(rawKey)` → `AuthContext | null` — parses the raw key, looks up
+  the record, verifies timing-safely, and returns an `AuthContext` derived from
+  the stored record.
+- `revoke(keyId)` → `boolean` — delegates to `deleteById`; idempotent.
+
+### CLI provisioning commands
+
+Two npm scripts provision and revoke keys locally:
+
+```bash
+# Provision a new API key for a user (resolved by globally unique email).
+npm run api-key:create --workspace apps/api -- --email alice@example.com
+
+# Revoke an existing key by its public key ID.
+npm run api-key:revoke --workspace apps/api -- --key-id <key-id>
+```
+
+The `create` script resolves the user by email (using the same global
+`findByEmailForAuthentication` lookup used at login), derives `tenantId` and
+`userId` from the stored user record, and prints the full key once with a clear
+warning that it cannot be retrieved again. The `revoke` script physically deletes
+the row; it is idempotent (a missing key ID exits cleanly). Neither script accepts
+a `tenantId` or `userId` as a CLI argument — ownership always comes from the stored
+record.
+
+No new REST endpoints are added in M12. The external ticket creation endpoint
+(which will use API-key authentication) is deferred to M13.
+
+Implemented:
+
+- **Migration** `apps/api/migrations/008_api_keys.sql` — `api_keys` STRICT table
+  with composite FK.
+- **`apps/api/src/auth/api-key-token.ts`** — key format, generation, parsing,
+  SHA-256 hashing, and timing-safe verification.
+- **`apps/api/src/repositories/api-key-repository.ts`** — `ApiKeyRepository`
+  (create, findById, deleteById).
+- **`apps/api/src/auth/api-key-service.ts`** — `ApiKeyService`
+  (create, authenticate, revoke).
+- **`apps/api/src/auth/api-key-middleware.ts`** — `createRequireApiKeyAuth`
+  Express middleware.
+- **`apps/api/src/scripts/api-key-create.ts`** — `npm run api-key:create` CLI.
+- **`apps/api/src/scripts/api-key-revoke.ts`** — `npm run api-key:revoke` CLI.
+- Minor updates to `apps/api/src/auth/auth-context.ts` (removed session-only
+  comment language) and `apps/api/src/auth/express-request.ts` (made `user`
+  optional in `AuthenticatedState` to support API-key auth, which does not load a
+  full user record).
+
+Explicitly **not** implemented in Milestone 12: API-key management UI; REST
+endpoints for creating or revoking keys; the external ticket creation REST endpoint
+(deferred to M13); caller-selected tenant or user; key listing; `revoked_at` or
+soft-delete; expiration; rotation; `last_used_at`; roles or an administrator
+model; and any M11 changes.
+
+## Earlier milestone scope (Milestone 10: Recent tickets backend)
 
 Backend only. Milestone 10 adds the first ticket read: an authenticated
 `GET /api/tickets?projectKey=...` that returns the ten most recent tickets
@@ -523,6 +637,12 @@ npm run seed       # run migrations, then insert demo data (idempotent)
   `007_jira_ticket_provenance_recent_index.sql` adds the additive index
   `ix_jira_ticket_provenance_recent (tenant_id, jira_site_url, jira_project_key,
   created_at DESC, id DESC)` serving the recent-tickets read access pattern.
+
+- `api_keys(id, tenant_id, user_id, secret_hash, created_at)` — one API key
+  per row, owned by one user in one tenant. `FOREIGN KEY (tenant_id, user_id)`
+  references `users(tenant_id, id)`. `secret_hash` is the SHA-256 hash of the
+  secret component of the key; the plaintext is never stored. Revocation
+  physically deletes the row; there is no `revoked_at` column or soft-delete.
 
 All tables are SQLite `STRICT` tables. Repositories enforce tenant scope: every
 normal user query requires the owning `tenantId`, so a user can never be read
