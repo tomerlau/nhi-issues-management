@@ -18,8 +18,9 @@ interface RecentTicketsPanelProps {
   /** Raw project key from the shared input (may be empty or mixed-case). */
   projectKey: string;
   /**
-   * Incremented by the parent after a ticket is successfully created. A non-zero
-   * value triggers an immediate refresh, bypassing the normal debounce.
+   * Incremented by the parent after a ticket is successfully created or after a
+   * successful Jira connection creation or replacement. A non-zero value triggers
+   * an immediate refresh, bypassing the normal debounce.
    */
   refreshKey: number;
 }
@@ -32,7 +33,8 @@ const DEBOUNCE_MS = 400;
  *
  * The component debounces project-key changes to avoid issuing a request on every
  * keystroke, but bypasses the debounce when `refreshKey` increments (which happens
- * immediately after a successful ticket creation). An AbortController cancels any
+ * immediately after a successful ticket creation or a successful Jira connection
+ * creation or replacement). An AbortController cancels any
  * in-flight request when the project key changes or when a refresh supersedes a
  * pending debounce, so a stale response can never replace the current project's
  * state.
@@ -115,7 +117,7 @@ export default function RecentTicketsPanel({ projectKey, refreshKey }: RecentTic
     }, DEBOUNCE_MS);
   }, [projectKey, doFetch]);
 
-  // React to refresh signals (successful ticket creation) with no debounce.
+  // React to refresh signals (successful ticket creation or Jira connection save) with no debounce.
   useEffect(() => {
     if (refreshKey === 0) return;
     const normalized = normalizeProjectKey(projectKeyRef.current);

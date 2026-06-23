@@ -23,8 +23,8 @@ function logoutMessage(error: unknown): string {
  *
  * The project key is shared state owned here so both the ticket-creation form and
  * the recent-tickets panel use the same selection. A `refreshKey` counter is
- * incremented after a successful creation so the recent-tickets panel refreshes
- * without debounce.
+ * incremented after a successful ticket creation or a successful Jira connection
+ * creation or replacement so the recent-tickets panel refreshes without debounce.
  */
 export default function AuthenticatedShell({ user, onLoggedOut }: AuthenticatedShellProps) {
   const [loggingOut, setLoggingOut] = useState(false);

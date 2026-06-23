@@ -120,9 +120,9 @@ Implemented:
   controlled input drives both, so typing a project key in the creation form
   immediately updates the recent-tickets list. A `refreshKey` counter is
   incremented on each successful ticket creation or Jira connection save to
-  trigger an immediate panel refresh. Shell callbacks are wrapped in
-  `useCallback` to keep their references stable across renders, avoiding
-  unnecessary re-runs of effects that list them as dependencies.
+  trigger an immediate panel refresh. `handleConnectionChange` is wrapped in
+  `useCallback` because `JiraConnectionPanel` lists it in an effect dependency
+  array; the other shell callbacks use `useCallback` as convention.
 - **A shared project-key utility** (`apps/web/src/utils/project-key.ts`) with
   `normalizeProjectKey`, `isValidProjectKey`, `PROJECT_KEY_PATTERN`, and
   `MAX_PROJECT_KEY_LENGTH`, shared between `TicketCreationPanel` and

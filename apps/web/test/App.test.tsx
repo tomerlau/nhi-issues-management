@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../src/App';
 import { AuthError, login, logout, restoreSession, type SafeUser } from '../src/api/auth';
 import { getJiraConnection, JiraApiError, saveJiraConnection } from '../src/api/jira';
-import { createTicket, listRecentTickets, TicketApiError, type CreatedTicket } from '../src/api/tickets';
+import { createTicket, listRecentTickets, TicketApiError, type CreatedTicket, type ListRecentTicketsResult, type RecentTicket } from '../src/api/tickets';
 
 vi.mock('../src/api/auth', async () => {
   const actual = await vi.importActual<typeof import('../src/api/auth')>('../src/api/auth');
@@ -372,15 +372,32 @@ describe('connection save refreshes recent tickets', () => {
     email: 'alice@example.com',
   };
 
+  const OLD_TICKET: RecentTicket = {
+    issueId: 'OLD-1',
+    issueKey: 'SCRUM-100',
+    title: 'Old ticket before connection replaced',
+    createdAt: '2024-01-01T00:00:00.000Z',
+    url: 'https://acme.atlassian.net/browse/SCRUM-100',
+  };
+
+  const NEW_TICKET: RecentTicket = {
+    issueId: 'NEW-1',
+    issueKey: 'SCRUM-101',
+    title: 'New ticket after connection replaced',
+    createdAt: '2024-01-02T00:00:00.000Z',
+    url: 'https://new.atlassian.net/browse/SCRUM-101',
+  };
+
   async function renderConnectedWithProject() {
     mockedRestore.mockResolvedValue(alice);
     mockedGetJira.mockResolvedValue(connectedJira);
-    mockedListRecentTickets.mockResolvedValue({ tickets: [] });
+    mockedListRecentTickets.mockResolvedValueOnce({ tickets: [OLD_TICKET] });
     render(<App />);
     await screen.findByLabelText(/project key/i);
 
     typeInto(/project key/i, 'SCRUM');
     await act(async () => { vi.advanceTimersByTime(600); });
+    await screen.findByText(OLD_TICKET.title);
   }
 
   beforeEach(() => {
@@ -391,9 +408,13 @@ describe('connection save refreshes recent tickets', () => {
     vi.useRealTimers();
   });
 
-  it('calls listRecentTickets after a successful connection replacement', async () => {
+  it('replaces old results with new results after a successful connection replacement', async () => {
     await renderConnectedWithProject();
-    const callsBefore = mockedListRecentTickets.mock.calls.length;
+
+    let resolveRefresh!: (value: ListRecentTicketsResult) => void;
+    mockedListRecentTickets.mockReturnValueOnce(
+      new Promise<ListRecentTicketsResult>((res) => { resolveRefresh = res; }),
+    );
 
     mockedSaveJira.mockResolvedValue({
       connected: true,
@@ -413,13 +434,27 @@ describe('connection save refreshes recent tickets', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: /^replace connection$/i }));
 
+    await screen.findByRole('status');
+
+    // Old results are gone immediately; loading is in progress; project key is preserved.
     await waitFor(() => {
-      expect(mockedListRecentTickets.mock.calls.length).toBeGreaterThan(callsBefore);
+      expect(screen.queryByText(OLD_TICKET.title)).not.toBeInTheDocument();
+      expect(screen.getByText(/loading tickets/i)).toBeInTheDocument();
     });
+    expect((screen.getByLabelText(/project key/i) as HTMLInputElement).value).toBe('SCRUM');
+    const calls = mockedListRecentTickets.mock.calls;
+    expect(calls[calls.length - 1][0]).toBe('SCRUM');
+
+    await act(async () => { resolveRefresh({ tickets: [NEW_TICKET] }); });
+
+    expect(screen.getByText(NEW_TICKET.title)).toBeInTheDocument();
+    expect(screen.queryByText(OLD_TICKET.title)).not.toBeInTheDocument();
   });
 
-  it('does not call listRecentTickets after a failed connection replacement', async () => {
+  it('leaves existing results unchanged after a failed connection replacement', async () => {
     await renderConnectedWithProject();
+
+    expect(screen.getByText(OLD_TICKET.title)).toBeInTheDocument();
 
     mockedSaveJira.mockRejectedValue(new JiraApiError('credentials_rejected', 'x'));
 
@@ -437,9 +472,7 @@ describe('connection save refreshes recent tickets', () => {
 
     await screen.findByRole('alert');
 
-    const callsAfterFailure = mockedListRecentTickets.mock.calls.length;
-    await new Promise<void>((r) => setTimeout(r, 100));
-    expect(mockedListRecentTickets.mock.calls.length).toBe(callsAfterFailure);
+    expect(screen.getByText(OLD_TICKET.title)).toBeInTheDocument();
   });
 });
 

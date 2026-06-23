@@ -904,16 +904,17 @@ Milestone 11 lifts it to `AuthenticatedShell`, where it is shared between the
 creation panel and the new recent-tickets panel. The shell owns two pieces of
 state: the raw project-key string and an integer `refreshKey`.
 
-`handleProjectKeyChange`, `handleTicketCreated`, and `handleConnectionSaved`
-are each wrapped in `useCallback`. This keeps their references stable across
-shell re-renders, which matters because `doFetch` in `RecentTicketsPanel` is
-itself a stable `useCallback` that lists `projectKey`-effect callbacks as
-dependencies — a changing reference would cause the projectKey effect to re-run
-unnecessarily. `TicketCreationPanel` receives `projectKey`, `onProjectKeyChange`,
-and `onTicketCreated` as props; it calls `onProjectKeyChange` with the
-normalized key after a successful creation and calls `onTicketCreated` to signal
-the refresh. Both panels are rendered inside the same `jiraConnected` guard, so
-the state is only ever live when it matters.
+`handleConnectionChange` is wrapped in `useCallback` because `JiraConnectionPanel`
+lists `onConnectionChange` in its effect dependency array `[connectedNow,
+onConnectionChange]` — an unstable reference would cause that effect to re-run on
+every shell render. `handleProjectKeyChange`, `handleTicketCreated`, and
+`handleConnectionSaved` use `useCallback` as convention; they are event and submit
+handlers, not effect dependencies, so reference stability has no correctness impact.
+There is no `React.memo` on either panel. `TicketCreationPanel` receives
+`projectKey`, `onProjectKeyChange`, and `onTicketCreated` as props; it calls
+`onProjectKeyChange` with the normalized key after a successful creation and calls
+`onTicketCreated` to signal the refresh. Both panels are rendered inside the same
+`jiraConnected` guard, so the state is only ever live when it matters.
 
 `handleConnectionSaved` increments `refreshKey` after `JiraConnectionPanel`
 reports a successful connection creation or replacement, triggering an immediate
