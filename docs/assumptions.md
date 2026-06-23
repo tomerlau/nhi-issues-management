@@ -1,7 +1,7 @@
 # Project Assumptions
 
 This document records the assumptions and tradeoffs relevant to the
-functionality implemented through the current milestone (Milestone 12). It grows
+functionality implemented through the current milestone (Milestone 13). It grows
 cumulatively as later milestones add functionality.
 
 ## Scope
@@ -34,6 +34,10 @@ cumulatively as later milestones add functionality.
 - Milestone 12 adds application-issued API-key authentication: an `api_keys`
   table, key generation and verification, authentication middleware, and local
   CLI provisioning and revocation commands.
+- Milestone 13 adds an external-facing REST endpoint (`POST /api/v1/tickets`)
+  that lets external systems create NHI finding Jira tickets using an
+  application-issued API key. It reuses the M8 ticket-creation domain service
+  and the M12 authentication infrastructure.
 - The optional blog digest is not part of the current implementation.
 
 ## Frontend
@@ -569,3 +573,43 @@ cumulatively as later milestones add functionality.
 - **Deferred:** API-key management UI, create/revoke REST endpoints, external ticket
   endpoint (M13), caller-selected tenant/user, key listing, `revoked_at`/soft-delete,
   expiration, rotation, `last_used_at`, roles/administrator model.
+
+## External ticket REST API (Milestone 13)
+
+- **Backend only.** `POST /api/v1/tickets` requires a valid `Authorization:
+  Bearer <api-key>` header. Session cookies are not accepted. `tenantId` and
+  `userId` come exclusively from the stored API-key record; no request input can
+  override them. There is no frontend in this milestone and no frontend change.
+- **API-key authentication runs before any Jira state is exposed.** A request
+  without a valid API key returns `401 Unauthenticated` before any Jira
+  configuration or connection check is performed.
+- **The endpoint reuses the existing ticket-creation domain service.** There is
+  no second ticket-creation implementation. `TicketService.createTicket` and
+  `JiraIntegrationService.createTicket` are shared with the session-authenticated
+  `POST /api/tickets` route. Validation rules (projectKey syntax, title and
+  description limits, lowercase normalization) are shared through
+  `ticket-validation.ts`. HTTP outcome mapping is shared through
+  `ticket-result-mapper.ts`.
+- **Ownership is immutable and comes from the stored key record.** The provenance
+  row always records the API-key owner's `tenantId` and `userId`. An API key
+  from tenant A never accesses tenant B's Jira connection, provenance table, or
+  creation context, even if tenant B's connection ID, site URL, or user is known.
+  Spoofed `tenantId`, `userId`, `connectionId`, `siteUrl`, or similar fields in
+  the request body are silently ignored and never affect the resolved context.
+- **The sequential, non-idempotent creation tradeoff from M8 applies here.**
+  Jira creation and SQLite provenance persistence are sequential and not atomic.
+  The same two untracked-issue cases apply (confirmed creation with failed
+  provenance → 500; timeout before confirmation → 504). Retrying after a timeout
+  or uncertain Jira response may create a duplicate issue. See the M8 tradeoff
+  in the section above for the production alternative.
+- **All error responses carry `Cache-Control: no-store`** including
+  authentication failures, validation failures, and terminal error-handler
+  responses.
+- **No REST endpoints for API-key management.** Keys are provisioned and revoked
+  only through the existing M12 CLI scripts. No create/list/rotate/revoke REST
+  endpoints are added.
+- **Deferred:** API-key management UI; REST endpoints for key creation, listing,
+  rotation, or revocation; batch ticket creation; idempotency keys; durable
+  workflow, queue, retry orchestration, reconciliation, or compensation; caller-
+  supplied tenant, user, Jira connection, site, or credentials; any frontend
+  changes.

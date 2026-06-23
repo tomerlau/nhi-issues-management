@@ -2,11 +2,10 @@
 
 A focused proof of concept for integrating Oasis Security IdentityHub with Jira.
 
-This repository is built in milestones. The current milestone (Milestone 12)
-adds application-issued API-key authentication: an `api_keys` table, key
-generation and verification, an Express middleware, and local CLI scripts to
-provision and revoke keys. It builds on the existing session-based
-authentication and AuthContext infrastructure.
+This repository is built in milestones. The current milestone (Milestone 13)
+adds an external-facing REST endpoint that lets external systems create NHI
+finding Jira tickets using an application-issued API key. It builds on the M12
+API-key authentication infrastructure and the M8 ticket-creation domain service.
 
 Milestone 10 added a backend-only recent-tickets read: an authenticated
 `GET /api/tickets?projectKey=...` endpoint that returns the ten most recent
@@ -105,7 +104,65 @@ scoped API-token support; roles, permissions, or tenant-admin UI; API-key
 functionality; browser credential persistence; global frontend state; and
 routing.
 
-## Current milestone scope (Milestone 12: API-key authentication)
+## Current milestone scope (Milestone 13: External ticket REST API)
+
+Backend only. Milestone 13 adds a focused external-facing REST endpoint that
+allows external systems to create NHI finding Jira tickets using an
+application-issued API key. It reuses the M8 `TicketService` and the M12
+API-key authentication infrastructure without duplicating any ticket-creation
+logic.
+
+### Endpoint
+
+```
+POST /api/v1/tickets
+Authorization: Bearer <application-api-key>
+Content-Type: application/json
+
+{
+  "projectKey": "SCRUM",
+  "title": "Stale Service Account: svc-deploy-prod",
+  "description": "Finding details"
+}
+```
+
+See [`docs/api.md`](docs/api.md) for the full API reference including status
+codes, error envelopes, curl examples, and secret-handling guidance.
+
+### Architecture
+
+- **`apps/api/src/jira/ticket-validation.ts`** — Shared validation module
+  extracted from `ticket-routes.ts`. Both the session-authenticated and
+  API-key-authenticated routes use it to validate and normalize `projectKey`,
+  `title`, and `description`.
+- **`apps/api/src/jira/ticket-result-mapper.ts`** — Small shared HTTP response
+  mapper. Maps a `CreateTicketResult` to the same status codes and error
+  envelopes on both routes.
+- **`apps/api/src/jira/external-ticket-routes.ts`** — The new external router
+  mounted at `/api/v1/tickets`. Authenticated by `createRequireApiKeyAuth` only;
+  session cookies are not accepted.
+- Minor updates to `apps/api/src/jira/ticket-routes.ts` (imports shared
+  validation and result mapper) and `apps/api/src/app.ts` (mounts the new
+  router, extends credential-bearing path check).
+
+### Security properties
+
+- **Authentication before Jira state**: API-key auth runs before any Jira
+  configuration or connection state is exposed.
+- **Ownership from stored record only**: `tenantId` and `userId` come exclusively
+  from the stored API-key record; no request input can override them.
+- **No session-cookie fallback**: a session cookie without a valid API key returns
+  401.
+- **No caller-supplied ownership fields**: `tenantId`, `userId`, `connectionId`,
+  `siteUrl`, or similar fields in the request body are ignored.
+- **Cache-Control: no-store** on every response.
+
+Explicitly **not** implemented in Milestone 13: a second ticket-creation
+implementation; API-key management UI or REST provisioning endpoints; batch
+ticket creation; an idempotency key; durable workflow, queue, retry
+orchestration, reconciliation, or compensation; or any frontend changes.
+
+## Earlier milestone scope (Milestone 12: API-key authentication)
 
 Backend only. Milestone 12 adds application-issued API-key authentication: an
 `api_keys` table, key generation and timing-safe verification, an Express
