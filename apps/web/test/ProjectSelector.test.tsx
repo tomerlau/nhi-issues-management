@@ -175,4 +175,26 @@ describe('info icon and tooltip', () => {
     await act(async () => { fireEvent.blur(icon); });
     expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
   });
+
+  it('tooltip carries the readable-width tooltip-text class', async () => {
+    render(<ProjectSelector value="" onChange={vi.fn()} />);
+
+    const icon = screen.getByRole('button', { name: /about the project key/i });
+    await act(async () => { fireEvent.focus(icon); });
+
+    // The shared .tooltip-text class owns the readable width, sentence
+    // wrapping, and viewport-bounded sizing.
+    expect(screen.getByRole('tooltip')).toHaveClass('tooltip-text');
+  });
+
+  it('does not render a separate standalone no-project paragraph', () => {
+    render(<ProjectSelector value="" onChange={vi.fn()} />);
+
+    // The previous milestone removed the persistent helper sentence in favour
+    // of the icon + tooltip — confirm no replacement standalone paragraph
+    // was reintroduced.
+    expect(
+      screen.queryByText(/enter a jira project key to view or create tickets\./i),
+    ).not.toBeInTheDocument();
+  });
 });

@@ -12,6 +12,7 @@
     "apps/web"
   ],
   "scripts": {
+    "setup": "node scripts/setup.mjs",
     "dev": "concurrently --names \"api,web\" --prefix-colors \"blue,magenta\" \"npm run dev --workspace apps/api\" \"npm run dev --workspace apps/web\"",
     "migrate": "npm run migrate --workspace apps/api",
     "seed": "npm run seed --workspace apps/api",
@@ -20,7 +21,8 @@
     "typecheck": "npm run typecheck --workspace apps/api && npm run typecheck --workspace apps/web",
     "test": "npm run test --workspace apps/api && npm run test --workspace apps/web",
     "test:workflow": "node --test .claude/hooks/*.test.mjs",
-    "check": "npm run lint && npm run typecheck && npm test && npm run test:workflow && npm run build"
+    "test:setup": "node --test scripts/*.test.mjs",
+    "check": "npm run lint && npm run typecheck && npm test && npm run test:workflow && npm run test:setup && npm run build"
   },
   "devDependencies": {
     "@eslint/js": "^9.18.0",

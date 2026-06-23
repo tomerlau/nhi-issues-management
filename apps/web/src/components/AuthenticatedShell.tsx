@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AuthError, logout, type SafeUser } from '../api/auth';
 import type { JiraConnectionStatus } from '../api/jira';
 import JiraConnectionPanel, { type JiraStatusUpdate } from './JiraConnectionPanel';
@@ -7,6 +7,7 @@ import ProjectSelector from './ProjectSelector';
 import RecentTicketsPanel from './RecentTicketsPanel';
 import TicketCreationModal from './TicketCreationModal';
 import { isValidProjectKey, normalizeProjectKey } from '../utils/project-key';
+import { loadLastProject, saveLastProject } from '../utils/project-preference';
 
 interface AuthenticatedShellProps {
   user: SafeUser;
@@ -52,12 +53,33 @@ export default function AuthenticatedShell({ user, onLoggedOut }: AuthenticatedS
   const [logoutError, setLogoutError] = useState<string | null>(null);
   const [jiraState, setJiraState] = useState<JiraShellState>({ status: 'loading' });
   const [jiraRefreshSignal, setJiraRefreshSignal] = useState(0);
-  const [projectKey, setProjectKey] = useState('');
+  // Initialize the project selector lazily from the user-and-tenant-scoped
+  // browser preference. Invalid, missing, or inaccessible storage falls back
+  // to an empty string (see project-preference.ts). The value is bound to the
+  // current SafeUser, so a different user starts with their own preference.
+  const [projectKey, setProjectKey] = useState<string>(() => loadLastProject(user));
   const [refreshKey, setRefreshKey] = useState(0);
   const [creationModalOpen, setCreationModalOpen] = useState(false);
   const [ticketCreationSubmitting, setTicketCreationSubmitting] = useState(false);
 
   const createTicketTriggerRef = useRef<HTMLButtonElement>(null);
+
+  // Reset the selector to the new user's saved preference when the
+  // authenticated user changes (e.g. a different user signs in within the
+  // same browser session). React reuses this component instance only when its
+  // key matches; the shell is mounted fresh per session in App.tsx, but the
+  // explicit effect makes the user/tenant-scoping guarantee robust to future
+  // refactors and to any in-place user swap a parent might perform.
+  useEffect(() => {
+    setProjectKey(loadLastProject(user));
+  }, [user]);
+
+  // Persist a newly-typed valid project key. Empty, partial, or invalid input
+  // is a deliberate no-op inside saveLastProject so the previous saved value
+  // is never overwritten by clearing the field or by transient invalid text.
+  useEffect(() => {
+    saveLastProject(user, projectKey);
+  }, [user, projectKey]);
 
   const handleJiraStatusChange = useCallback((update: JiraStatusUpdate) => {
     setJiraState((current) => {
