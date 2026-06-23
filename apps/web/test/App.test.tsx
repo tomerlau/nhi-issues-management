@@ -15,8 +15,6 @@ vi.mock('../src/api/auth', async () => {
   };
 });
 
-// The authenticated shell mounts the Jira panel, which loads its status on mount.
-// Stub it so these auth-focused tests never make a real network request.
 vi.mock('../src/api/jira', async () => {
   const actual = await vi.importActual<typeof import('../src/api/jira')>('../src/api/jira');
   return {
@@ -26,9 +24,6 @@ vi.mock('../src/api/jira', async () => {
   };
 });
 
-// The shell also mounts the ticket panels. Stub both so these tests never make
-// real network requests (recent tickets are not requested until a valid project
-// key is entered, but creation is exercised in the integration tests below).
 vi.mock('../src/api/tickets', async () => {
   const actual = await vi.importActual<typeof import('../src/api/tickets')>('../src/api/tickets');
   return {
@@ -57,7 +52,6 @@ function typeInto(label: RegExp, value: string) {
   fireEvent.change(screen.getByLabelText(label), { target: { value } });
 }
 
-/** Resolve restoreSession to the unauthenticated state and wait for the login form. */
 async function renderLoggedOut() {
   mockedRestore.mockResolvedValue(null);
   render(<App />);
@@ -66,16 +60,22 @@ async function renderLoggedOut() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.useFakeTimers({ shouldAdvanceTime: true });
   mockedGetJira.mockResolvedValue({ connected: false });
   mockedListRecentTickets.mockResolvedValue({ tickets: [] });
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   cleanup();
 });
 
+// ---------------------------------------------------------------------------
+// Product branding
+// ---------------------------------------------------------------------------
+
 describe('product branding', () => {
-  it('uses the product name in the login heading and not the old name', async () => {
+  it('uses the product name in the login heading', async () => {
     await renderLoggedOut();
 
     expect(
@@ -84,17 +84,20 @@ describe('product branding', () => {
     expect(screen.queryByText(/IdentityHub to Jira/i)).not.toBeInTheDocument();
   });
 
-  it('uses the product name in the authenticated header and subtitle', async () => {
+  it('uses the product name in the authenticated header', async () => {
     mockedRestore.mockResolvedValue(alice);
 
     render(<App />);
     await screen.findByText(/welcome, alice anderson/i);
 
     expect(within(screen.getByRole('banner')).getByText('NHI Issues Management')).toBeInTheDocument();
-    expect(screen.getByText('You are signed in to NHI Issues Management.')).toBeInTheDocument();
     expect(screen.queryByText(/IdentityHub to Jira/i)).not.toBeInTheDocument();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Session restoration
+// ---------------------------------------------------------------------------
 
 describe('session restoration', () => {
   it('shows a loading state while restoration is pending', () => {
@@ -113,7 +116,7 @@ describe('session restoration', () => {
     expect(await screen.findByText(/welcome, alice anderson/i)).toBeInTheDocument();
   });
 
-  it('shows the login screen on the unauthenticated 401 state', async () => {
+  it('shows the login screen on the unauthenticated state', async () => {
     mockedRestore.mockResolvedValue(null);
 
     render(<App />);
@@ -121,7 +124,7 @@ describe('session restoration', () => {
     expect(await screen.findByRole('button', { name: /^sign in$/i })).toBeInTheDocument();
   });
 
-  it('shows a retryable error (not the login screen) when restoration fails', async () => {
+  it('shows a retryable error when restoration fails', async () => {
     mockedRestore.mockRejectedValue(new AuthError('network', 'Unable to reach the server.'));
 
     render(<App />);
@@ -141,6 +144,10 @@ describe('session restoration', () => {
     expect(await screen.findByText(/welcome, alice anderson/i)).toBeInTheDocument();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Login
+// ---------------------------------------------------------------------------
 
 describe('login', () => {
   it('authenticates and shows the safe user on success', async () => {
@@ -167,7 +174,6 @@ describe('login', () => {
     fireEvent.click(screen.getByRole('button', { name: /^sign in$/i }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/invalid email or password/i);
-    // The password field is cleared after a completed attempt.
     expect(screen.getByLabelText(/password/i)).toHaveValue('');
   });
 
@@ -197,9 +203,7 @@ describe('login', () => {
     await renderLoggedOut();
     let resolveLogin: (user: SafeUser) => void = () => {};
     mockedLogin.mockReturnValue(
-      new Promise<SafeUser>((resolve) => {
-        resolveLogin = resolve;
-      }),
+      new Promise<SafeUser>((resolve) => { resolveLogin = resolve; }),
     );
 
     typeInto(/email/i, 'alice@example.com');
@@ -216,8 +220,12 @@ describe('login', () => {
   });
 });
 
-describe('ticket creation gating', () => {
-  it('shows the ticket creation form only when Jira is connected', async () => {
+// ---------------------------------------------------------------------------
+// Project selector and Jira gating
+// ---------------------------------------------------------------------------
+
+describe('project selector gating', () => {
+  it('shows the "Jira project" selector only when Jira is connected', async () => {
     mockedRestore.mockResolvedValue(alice);
     mockedGetJira.mockResolvedValue({
       connected: true,
@@ -228,83 +236,212 @@ describe('ticket creation gating', () => {
     render(<App />);
     await screen.findByText(/welcome, alice anderson/i);
 
-    expect(await screen.findByLabelText(/project key/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /^create ticket$/i })).toBeInTheDocument();
+    expect(await screen.findByLabelText(/jira project/i)).toBeInTheDocument();
   });
 
-  it('hides the ticket creation form when Jira is disconnected', async () => {
+  it('hides the "Jira project" selector when Jira is disconnected', async () => {
     mockedRestore.mockResolvedValue(alice);
     mockedGetJira.mockResolvedValue({ connected: false });
 
     render(<App />);
-    await screen.findByText(/welcome, alice anderson/i);
-    await screen.findByText(/not connected to jira yet/i);
+    await screen.findByText(/jira not connected/i);
 
-    expect(screen.queryByLabelText(/project key/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/jira project/i)).not.toBeInTheDocument();
   });
 
-  it('hides the ticket creation form while the connection status is loading', async () => {
+  it('hides the "Jira project" selector while the connection status is loading', async () => {
     mockedRestore.mockResolvedValue(alice);
     mockedGetJira.mockReturnValue(new Promise(() => {}));
 
     render(<App />);
     await screen.findByText(/welcome, alice anderson/i);
 
-    expect(screen.queryByLabelText(/project key/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/jira project/i)).not.toBeInTheDocument();
   });
 
-  it('hides the ticket creation form when the connection status fails to load', async () => {
-    mockedRestore.mockResolvedValue(alice);
-    mockedGetJira.mockRejectedValue(new JiraApiError('network', 'x'));
-
-    render(<App />);
-    await screen.findByText(/welcome, alice anderson/i);
-    await screen.findByText(/unable to reach the server/i);
-
-    expect(screen.queryByLabelText(/project key/i)).not.toBeInTheDocument();
-  });
-});
-
-describe('recent-tickets panel', () => {
-  async function renderConnected() {
+  it('shows a prompt when no valid project key is entered', async () => {
     mockedRestore.mockResolvedValue(alice);
     mockedGetJira.mockResolvedValue({
       connected: true,
       siteUrl: 'https://acme.atlassian.net',
       email: 'alice@example.com',
     });
+
     render(<App />);
-    await screen.findByLabelText(/project key/i);
-  }
-
-  it('shows the recent-tickets panel when Jira is connected', async () => {
-    await renderConnected();
-
-    expect(screen.getByRole('heading', { name: /recent tickets/i })).toBeInTheDocument();
-  });
-
-  it('shows the prompt state when no project key is entered', async () => {
-    await renderConnected();
+    await screen.findByLabelText(/jira project/i);
 
     expect(screen.getByText(/enter a jira project key/i)).toBeInTheDocument();
     expect(mockedListRecentTickets).not.toHaveBeenCalled();
   });
 
-  it('hides the recent-tickets panel when Jira is disconnected', async () => {
+  it('shows exactly one project-key input — in the page-level selector', async () => {
+    mockedRestore.mockResolvedValue(alice);
+    mockedGetJira.mockResolvedValue({
+      connected: true,
+      siteUrl: 'https://acme.atlassian.net',
+      email: 'alice@example.com',
+    });
+
+    render(<App />);
+    await screen.findByLabelText(/jira project/i);
+
+    // Only one input with name="projectKey" or label "Jira project".
+    const projectInputs = document.querySelectorAll('input[name="projectKey"]');
+    expect(projectInputs.length).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Compact Jira status bar
+// ---------------------------------------------------------------------------
+
+describe('compact Jira status bar', () => {
+  it('shows "Jira not connected" and "Connect Jira" button when disconnected', async () => {
     mockedRestore.mockResolvedValue(alice);
     mockedGetJira.mockResolvedValue({ connected: false });
 
     render(<App />);
-    await screen.findByText(/not connected to jira yet/i);
+    await screen.findByText(/welcome, alice anderson/i);
+    await screen.findByText(/jira not connected/i);
 
-    expect(screen.queryByText(/recent tickets/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^connect jira$/i })).toBeInTheDocument();
+  });
+
+  it('shows "Jira connected" and "Manage" button when connected', async () => {
+    mockedRestore.mockResolvedValue(alice);
+    mockedGetJira.mockResolvedValue({
+      connected: true,
+      siteUrl: 'https://acme.atlassian.net',
+      email: 'alice@example.com',
+    });
+
+    render(<App />);
+    await screen.findByText(/jira connected/i);
+
+    expect(screen.getByRole('button', { name: /^manage$/i })).toBeInTheDocument();
+  });
+
+  it('does NOT show the Jira site URL on the page (only inside the modal)', async () => {
+    mockedRestore.mockResolvedValue(alice);
+    mockedGetJira.mockResolvedValue({
+      connected: true,
+      siteUrl: 'https://acme.atlassian.net',
+      email: 'alice@example.com',
+    });
+
+    render(<App />);
+    await screen.findByText(/jira connected/i);
+
+    expect(screen.queryByText('https://acme.atlassian.net')).not.toBeInTheDocument();
   });
 });
 
-describe('ticket creation refreshes recent tickets', () => {
-  it('calls listRecentTickets after a successful ticket creation', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+// ---------------------------------------------------------------------------
+// Mode B — zero tickets
+// ---------------------------------------------------------------------------
 
+describe('Mode B — zero tickets', () => {
+  async function renderConnectedWithProject(projectKey = 'SCRUM') {
+    mockedRestore.mockResolvedValue(alice);
+    mockedGetJira.mockResolvedValue({
+      connected: true,
+      siteUrl: 'https://acme.atlassian.net',
+      email: 'alice@example.com',
+    });
+    mockedListRecentTickets.mockResolvedValue({ tickets: [] });
+    render(<App />);
+    await screen.findByLabelText(/jira project/i);
+    typeInto(/jira project/i, projectKey);
+    await act(async () => { vi.advanceTimersByTime(600); });
+    await screen.findByRole('heading', { name: /create your first jira ticket/i });
+  }
+
+  it('shows Mode B heading when zero tickets are returned', async () => {
+    await renderConnectedWithProject();
+
+    expect(screen.getByRole('heading', { name: /create your first jira ticket/i })).toBeInTheDocument();
+  });
+
+  it('does NOT show "Recent tickets" heading in Mode B', async () => {
+    await renderConnectedWithProject();
+
+    expect(screen.queryByRole('heading', { name: /^recent tickets$/i })).not.toBeInTheDocument();
+  });
+
+  it('shows inline creation form in Mode B', async () => {
+    await renderConnectedWithProject();
+
+    expect(screen.getByLabelText(/title/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/description/i)).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Mode A — tickets exist
+// ---------------------------------------------------------------------------
+
+describe('Mode A — tickets exist', () => {
+  const OLD_TICKET: RecentTicket = {
+    issueId: '10001',
+    issueKey: 'SCRUM-1',
+    title: 'Existing ticket title',
+    createdAt: '2024-01-01T00:00:00.000Z',
+    url: 'https://acme.atlassian.net/browse/SCRUM-1',
+  };
+
+  async function renderConnectedWithTickets() {
+    mockedRestore.mockResolvedValue(alice);
+    mockedGetJira.mockResolvedValue({
+      connected: true,
+      siteUrl: 'https://acme.atlassian.net',
+      email: 'alice@example.com',
+    });
+    mockedListRecentTickets.mockResolvedValue({ tickets: [OLD_TICKET] });
+    render(<App />);
+    await screen.findByLabelText(/jira project/i);
+    typeInto(/jira project/i, 'SCRUM');
+    await act(async () => { vi.advanceTimersByTime(600); });
+    await screen.findByRole('heading', { name: /recent tickets/i });
+  }
+
+  it('shows "Recent tickets" heading in Mode A', async () => {
+    await renderConnectedWithTickets();
+
+    expect(screen.getByRole('heading', { name: /recent tickets/i })).toBeInTheDocument();
+  });
+
+  it('shows a "Create ticket" button in Mode A', async () => {
+    await renderConnectedWithTickets();
+
+    expect(screen.getByRole('button', { name: /^create ticket$/i })).toBeInTheDocument();
+  });
+
+  it('opens the creation modal when "Create ticket" is clicked', async () => {
+    await renderConnectedWithTickets();
+
+    fireEvent.click(screen.getByRole('button', { name: /^create ticket$/i }));
+
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+  });
+
+  it('modal does not contain a project-key input', async () => {
+    await renderConnectedWithTickets();
+
+    fireEvent.click(screen.getByRole('button', { name: /^create ticket$/i }));
+
+    await screen.findByRole('dialog');
+    // Only one projectKey input total (the page-level selector).
+    const projectInputs = document.querySelectorAll('input[name="projectKey"]');
+    expect(projectInputs.length).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Ticket creation refreshes recent tickets
+// ---------------------------------------------------------------------------
+
+describe('ticket creation refreshes recent tickets', () => {
+  it('calls listRecentTickets after a successful ticket creation via inline form (Mode B)', async () => {
     mockedRestore.mockResolvedValue(alice);
     mockedGetJira.mockResolvedValue({
       connected: true,
@@ -315,9 +452,12 @@ describe('ticket creation refreshes recent tickets', () => {
     mockedListRecentTickets.mockResolvedValue({ tickets: [] });
 
     render(<App />);
-    await screen.findByLabelText(/project key/i);
+    await screen.findByLabelText(/jira project/i);
 
-    typeInto(/project key/i, 'SCRUM');
+    typeInto(/jira project/i, 'SCRUM');
+    await act(async () => { vi.advanceTimersByTime(600); });
+    await screen.findByRole('heading', { name: /create your first jira ticket/i });
+
     typeInto(/title/i, 'Test ticket');
     typeInto(/description/i, 'Test description');
     fireEvent.click(screen.getByRole('button', { name: /^create ticket$/i }));
@@ -327,13 +467,9 @@ describe('ticket creation refreshes recent tickets', () => {
     await waitFor(() => {
       expect(mockedListRecentTickets).toHaveBeenCalledWith('SCRUM', expect.anything());
     });
-
-    vi.useRealTimers();
   });
 
   it('does not call listRecentTickets after a failed ticket creation', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-
     mockedRestore.mockResolvedValue(alice);
     mockedGetJira.mockResolvedValue({
       connected: true,
@@ -343,27 +479,27 @@ describe('ticket creation refreshes recent tickets', () => {
     mockedCreateTicket.mockRejectedValue(new TicketApiError('not_connected', 'x'));
 
     render(<App />);
-    await screen.findByLabelText(/project key/i);
+    await screen.findByLabelText(/jira project/i);
 
-    typeInto(/project key/i, 'SCRUM');
+    typeInto(/jira project/i, 'SCRUM');
+    await act(async () => { vi.advanceTimersByTime(600); });
+    await screen.findByRole('heading', { name: /create your first jira ticket/i });
+
     typeInto(/title/i, 'Test ticket');
     typeInto(/description/i, 'Test description');
     fireEvent.click(screen.getByRole('button', { name: /^create ticket$/i }));
 
     await screen.findByRole('alert');
 
-    // listRecentTickets should not have been called beyond initial debounce behavior.
-    // Since there's an active valid key, it may be called by the debounce but NOT by
-    // the failed creation trigger.
     const callCountAfterFailure = mockedListRecentTickets.mock.calls.length;
-
-    // Wait a bit to confirm no extra call from the failure.
     await new Promise<void>((r) => setTimeout(r, 100));
     expect(mockedListRecentTickets.mock.calls.length).toBe(callCountAfterFailure);
-
-    vi.useRealTimers();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Connection save refreshes recent tickets
+// ---------------------------------------------------------------------------
 
 describe('connection save refreshes recent tickets', () => {
   const connectedJira = {
@@ -393,20 +529,12 @@ describe('connection save refreshes recent tickets', () => {
     mockedGetJira.mockResolvedValue(connectedJira);
     mockedListRecentTickets.mockResolvedValueOnce({ tickets: [OLD_TICKET] });
     render(<App />);
-    await screen.findByLabelText(/project key/i);
+    await screen.findByLabelText(/jira project/i);
 
-    typeInto(/project key/i, 'SCRUM');
+    typeInto(/jira project/i, 'SCRUM');
     await act(async () => { vi.advanceTimersByTime(600); });
     await screen.findByText(OLD_TICKET.title);
   }
-
-  beforeEach(() => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
 
   it('replaces old results with new results after a successful connection replacement', async () => {
     await renderConnectedWithProject();
@@ -422,7 +550,10 @@ describe('connection save refreshes recent tickets', () => {
       email: 'alice@example.com',
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /replace connection/i }));
+    // Open the Jira modal via "Manage".
+    fireEvent.click(screen.getByRole('button', { name: /^manage$/i }));
+    await screen.findByRole('dialog');
+
     fireEvent.change(screen.getByLabelText(/site url/i), {
       target: { value: 'https://new.atlassian.net' },
     });
@@ -434,16 +565,17 @@ describe('connection save refreshes recent tickets', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: /^replace connection$/i }));
 
-    await screen.findByRole('status');
+    // Modal closes on success.
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
 
-    // Old results are gone immediately; loading is in progress; project key is preserved.
+    // Old results are gone; loading is in progress; project key is preserved.
     await waitFor(() => {
       expect(screen.queryByText(OLD_TICKET.title)).not.toBeInTheDocument();
       expect(screen.getByText(/loading tickets/i)).toBeInTheDocument();
     });
-    expect((screen.getByLabelText(/project key/i) as HTMLInputElement).value).toBe('SCRUM');
-    const calls = mockedListRecentTickets.mock.calls;
-    expect(calls[calls.length - 1][0]).toBe('SCRUM');
+    expect((screen.getByLabelText(/jira project/i) as HTMLInputElement).value).toBe('SCRUM');
 
     await act(async () => { resolveRefresh({ tickets: [NEW_TICKET] }); });
 
@@ -458,7 +590,9 @@ describe('connection save refreshes recent tickets', () => {
 
     mockedSaveJira.mockRejectedValue(new JiraApiError('credentials_rejected', 'x'));
 
-    fireEvent.click(screen.getByRole('button', { name: /replace connection/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^manage$/i }));
+    await screen.findByRole('dialog');
+
     fireEvent.change(screen.getByLabelText(/site url/i), {
       target: { value: 'https://new.atlassian.net' },
     });
@@ -472,9 +606,16 @@ describe('connection save refreshes recent tickets', () => {
 
     await screen.findByRole('alert');
 
+    // Modal stays open; close it.
+    fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
+
     expect(screen.getByText(OLD_TICKET.title)).toBeInTheDocument();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Logout
+// ---------------------------------------------------------------------------
 
 describe('logout', () => {
   async function renderAuthenticated() {

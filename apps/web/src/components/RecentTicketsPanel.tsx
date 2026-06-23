@@ -7,6 +7,7 @@ import {
   type RecentTicketsErrorKind,
 } from '../api/tickets';
 import { isValidProjectKey, normalizeProjectKey } from '../utils/project-key';
+import TicketCreationForm from './TicketCreationForm';
 
 type ListState =
   | { type: 'prompt' }
@@ -19,35 +20,44 @@ interface RecentTicketsPanelProps {
   projectKey: string;
   /**
    * Incremented by the parent after a ticket is successfully created or after a
-   * successful Jira connection creation or replacement. A non-zero value triggers
-   * an immediate refresh, bypassing the normal debounce.
+   * successful Jira connection creation or replacement. Triggers an immediate
+   * refresh bypassing debounce.
    */
   refreshKey: number;
+  /** Called when the user clicks "Create ticket" in Mode A to open the modal. */
+  onOpenCreationModal?: () => void;
+  /** Called after successful inline ticket creation in Mode B. */
+  onTicketCreated?: () => void;
 }
 
 const DEBOUNCE_MS = 400;
 
 /**
- * Display the ten most recent tickets created through this application for the
- * currently selected Jira project.
+ * Displays the ten most recent tickets for the selected Jira project.
  *
- * The component debounces project-key changes to avoid issuing a request on every
- * keystroke, but bypasses the debounce when `refreshKey` increments (which happens
- * immediately after a successful ticket creation or a successful Jira connection
- * creation or replacement). An AbortController cancels any
- * in-flight request when the project key changes or when a refresh supersedes a
- * pending debounce, so a stale response can never replace the current project's
- * state.
+ * Mode A (tickets exist): shows the "Recent tickets" heading, the ticket list,
+ * and a "Create ticket" button that opens the creation modal via
+ * `onOpenCreationModal`.
+ *
+ * Mode B (zero tickets): shows an inline "Create your first Jira ticket!" panel
+ * with a TicketCreationForm. No "Recent tickets" heading, list, or empty-state
+ * text is ever shown in Mode B.
+ *
+ * All debounce, immediate-refresh, abort, and stale-response behaviors from
+ * the previous milestone are preserved.
  */
-export default function RecentTicketsPanel({ projectKey, refreshKey }: RecentTicketsPanelProps) {
+export default function RecentTicketsPanel({
+  projectKey,
+  refreshKey,
+  onOpenCreationModal,
+  onTicketCreated,
+}: RecentTicketsPanelProps) {
   const headingId = useId();
   const [listState, setListState] = useState<ListState>({ type: 'prompt' });
 
   const abortRef = useRef<AbortController | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Kept in a ref so the refreshKey effect can read the latest projectKey without
-  // being a reactive dependency (which would re-run the effect on key changes).
   const projectKeyRef = useRef(projectKey);
   projectKeyRef.current = projectKey;
 
@@ -73,19 +83,15 @@ export default function RecentTicketsPanel({ projectKey, refreshKey }: RecentTic
       });
   }, []);
 
-  // Abort any active request and clear any pending debounce on unmount so state
-  // updates never fire after the component is removed from the tree.
+  // Abort and clear debounce on unmount.
   useEffect(() => {
     return () => {
-      if (debounceRef.current !== null) {
-        clearTimeout(debounceRef.current);
-      }
+      if (debounceRef.current !== null) clearTimeout(debounceRef.current);
       abortRef.current?.abort();
     };
   }, []);
 
-  // React to project-key changes with a debounce. Switching to an invalid key
-  // cancels any pending request and resets to the prompt state immediately.
+  // React to project-key changes with debounce.
   useEffect(() => {
     const normalized = normalizeProjectKey(projectKey);
 
@@ -101,14 +107,8 @@ export default function RecentTicketsPanel({ projectKey, refreshKey }: RecentTic
       return;
     }
 
-    // Abort any in-flight request immediately when the project key changes, so
-    // a stale response cannot arrive and overwrite the loading state during the
-    // 400 ms debounce window.
     abortRef.current?.abort();
     abortRef.current = null;
-
-    // Show loading immediately so the previous project's results are not visible
-    // while the debounce is pending.
     setListState({ type: 'loading' });
 
     debounceRef.current = setTimeout(() => {
@@ -117,7 +117,7 @@ export default function RecentTicketsPanel({ projectKey, refreshKey }: RecentTic
     }, DEBOUNCE_MS);
   }, [projectKey, doFetch]);
 
-  // React to refresh signals (successful ticket creation or Jira connection save) with no debounce.
+  // React to refresh signals immediately (bypasses debounce).
   useEffect(() => {
     if (refreshKey === 0) return;
     const normalized = normalizeProjectKey(projectKeyRef.current);
@@ -133,63 +133,92 @@ export default function RecentTicketsPanel({ projectKey, refreshKey }: RecentTic
 
   function handleRetry() {
     const normalized = normalizeProjectKey(projectKey);
-    if (isValidProjectKey(normalized)) {
-      doFetch(normalized);
-    }
+    if (isValidProjectKey(normalized)) doFetch(normalized);
   }
 
-  return (
-    <section className="recent-tickets-panel" aria-labelledby={headingId}>
-      <h2 id={headingId}>Recent tickets</h2>
+  // -------------------------------------------------------------------------
+  // Rendering
+  // -------------------------------------------------------------------------
 
-      {listState.type === 'prompt' && (
-        <p className="recent-tickets-prompt">
-          Enter a Jira project key above to view recent tickets created through
-          this application.
-        </p>
-      )}
+  if (listState.type === 'prompt') {
+    return null;
+  }
 
-      {listState.type === 'loading' && (
+  if (listState.type === 'loading') {
+    return (
+      <div className="recent-tickets-panel">
         <p className="recent-tickets-loading" aria-live="polite" aria-busy="true">
           Loading tickets…
         </p>
-      )}
+      </div>
+    );
+  }
 
-      {listState.type === 'success' && listState.tickets.length === 0 && (
-        <p className="recent-tickets-empty">
-          No tickets created through this application were found for this project.
-        </p>
-      )}
-
-      {listState.type === 'success' && listState.tickets.length > 0 && (
-        <ol className="recent-tickets-list" aria-label="Recent tickets">
-          {listState.tickets.map((ticket) => (
-            <li key={ticket.issueId} className="recent-ticket-item">
-              <a
-                href={ticket.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="ticket-link"
-              >
-                {ticket.title}
-              </a>
-              <span className="ticket-key">{ticket.issueKey}</span>
-              <time className="ticket-time" dateTime={ticket.createdAt}>
-                {new Date(ticket.createdAt).toLocaleString()}
-              </time>
-            </li>
-          ))}
-        </ol>
-      )}
-
-      {listState.type === 'error' && (
+  if (listState.type === 'error') {
+    return (
+      <div className="recent-tickets-panel">
         <div role="alert" className="recent-tickets-error">
           <p>{messageForReadError(listState.kind)}</p>
           <button type="button" onClick={handleRetry}>
             Retry
           </button>
         </div>
-      )}
+      </div>
+    );
+  }
+
+  // Success state: Mode A (tickets exist) or Mode B (zero tickets).
+  const { tickets } = listState;
+
+  if (tickets.length === 0) {
+    // Mode B — first ticket inline creation.
+    const normalizedKey = normalizeProjectKey(projectKey);
+    return (
+      <div className="recent-tickets-panel first-ticket-panel">
+        <h2>Create your first Jira ticket!</h2>
+        <p className="first-ticket-intro">
+          Create the first ticket for project <strong>{normalizedKey}</strong>{' '}
+          through this application.
+        </p>
+        <TicketCreationForm
+          projectKey={normalizedKey}
+          onSuccess={() => onTicketCreated?.()}
+        />
+      </div>
+    );
+  }
+
+  // Mode A — existing tickets.
+  return (
+    <section className="recent-tickets-panel" aria-labelledby={headingId}>
+      <div className="recent-tickets-header">
+        <h2 id={headingId}>Recent tickets</h2>
+        <button
+          type="button"
+          onClick={onOpenCreationModal}
+        >
+          Create ticket
+        </button>
+      </div>
+
+      <ol className="recent-tickets-list" aria-label="Recent tickets">
+        {tickets.map((ticket) => (
+          <li key={ticket.issueId} className="recent-ticket-item">
+            <a
+              href={ticket.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="ticket-link"
+            >
+              {ticket.title}
+            </a>
+            <span className="ticket-key">{ticket.issueKey}</span>
+            <time className="ticket-time" dateTime={ticket.createdAt}>
+              {new Date(ticket.createdAt).toLocaleString()}
+            </time>
+          </li>
+        ))}
+      </ol>
     </section>
   );
 }

@@ -147,21 +147,25 @@ and the module logs nothing.
 
 ### Jira connection panel
 
-`src/components/JiraConnectionPanel.tsx` is mounted inside the authenticated
-shell. It owns a small load state (`loading` → `ready` / `error`) plus the safe
-connection status, and renders the disconnected form, the connected summary
-(safe site URL and email only), the shared-tenant explanation, the create/replace
-flow, and a load-error state. The load-error state retains the safe
-`JiraErrorKind` from a rejected `getJiraConnection` (falling back to `server` for
-an unknown error, and ignoring `AbortError`), so it shows category-specific copy
-— configuration, availability, timeout, network, or generic — instead of one
-collapsed message, and offers a **Try again** retry where retrying is meaningful.
-An authentication failure is the exception: it explains the session is no longer
-valid and asks the user to refresh or sign in again rather than offering a futile
-retry. It derives the displayed status solely from the backend response; it never
-renders raw backend messages, technical error codes, internal
-user/tenant/connection IDs, account IDs, audit metadata, encrypted data, or
-credential material.
+`src/components/JiraConnectionPanel.tsx` is mounted in the application header
+inside the authenticated shell. As of Milestone 11 it was refactored from a
+full-page form into a compact status bar + modal. The bar renders only the
+current connection state ("Jira connected" / "Jira not connected") and a trigger
+button ("Manage" or "Connect Jira"). Connection details (site URL, email), the
+tenant-sharing disclaimer, and the create/replace form live exclusively inside an
+accessible modal (`div[role="dialog" aria-modal="true"]`) that opens on demand
+and closes on a successful save. A failed save keeps the modal open; Escape is
+blocked while a save is in flight.
+
+Regardless of modal or bar, the component owns a small load state (`loading` →
+`ready` / `error`) plus the safe connection status. The load-error state retains
+the safe `JiraErrorKind` (falling back to `server` for an unknown error, ignoring
+`AbortError`), shows category-specific copy, and offers a **Try again** retry
+where retrying is meaningful. An authentication failure asks the user to refresh
+or sign in rather than offering a futile retry. It derives the displayed status
+solely from the backend response; it never renders raw backend messages, technical
+error codes, internal user/tenant/connection IDs, account IDs, audit metadata,
+encrypted data, or credential material.
 
 ### Why the API token is never held in client state
 
@@ -890,31 +894,41 @@ plaintext token, raw Jira content, or internal error detail.
 
 ## Frontend recent-tickets UI (Milestone 11)
 
-Milestone 11 adds the user-facing recent-tickets view. It is **frontend only**
-and consumes the unchanged Milestone 10 `GET /api/tickets?projectKey=...`
+Milestone 11 delivers the full recent-tickets UX redesign. It is **frontend
+only** and consumes the unchanged Milestone 10 `GET /api/tickets?projectKey=...`
 contract; no backend behavior changed. The flow follows the same client boundary
 as the rest of the frontend: it holds no secrets, talks to the backend only over
 a relative `/api` request with the same-origin session cookie, and derives
 displayed values solely from the validated API response.
 
-### Shared project-key state
+### Page-level project selector
 
-Milestone 9 held the project key as local state inside `TicketCreationPanel`.
-Milestone 11 lifts it to `AuthenticatedShell`, where it is shared between the
-creation panel and the new recent-tickets panel. The shell owns two pieces of
-state: the raw project-key string and an integer `refreshKey`.
+`src/components/ProjectSelector.tsx` is a new standalone component rendered in
+the main content area when the tenant is Jira-connected. It shows a "Jira
+project" label, a single text input, and a "Used for recent tickets and new
+ticket creation." hint. A validation error (`role="alert"`) appears only for
+non-empty, invalid keys — an empty value is always silent. The component is not
+inside any form element; it is wired directly into `AuthenticatedShell` via an
+`onChange` prop.
+
+### Shared project-key state and shell layout
+
+`AuthenticatedShell` owns three pieces of state: the raw `projectKey` string, an
+integer `refreshKey`, and a boolean `creationModalOpen`. When the tenant is
+Jira-connected the shell renders:
+
+1. `JiraConnectionPanel` in the header alongside user info.
+2. `ProjectSelector` in the main area.
+3. A no-project prompt **or** `RecentTicketsPanel`, gated on whether the
+   normalized key is valid.
+4. `TicketCreationModal` (rendered outside the flow, always present while
+   Jira-connected, shown/hidden via the `open` prop).
 
 `handleConnectionChange` is wrapped in `useCallback` because `JiraConnectionPanel`
-lists `onConnectionChange` in its effect dependency array `[connectedNow,
-onConnectionChange]` — an unstable reference would cause that effect to re-run on
-every shell render. `handleProjectKeyChange`, `handleTicketCreated`, and
-`handleConnectionSaved` use `useCallback` as convention; they are event and submit
-handlers, not effect dependencies, so reference stability has no correctness impact.
-There is no `React.memo` on either panel. `TicketCreationPanel` receives
-`projectKey`, `onProjectKeyChange`, and `onTicketCreated` as props; it calls
-`onProjectKeyChange` with the normalized key after a successful creation and calls
-`onTicketCreated` to signal the refresh. Both panels are rendered inside the same
-`jiraConnected` guard, so the state is only ever live when it matters.
+lists `onConnectionChange` in its effect dependency array — an unstable reference
+would cause that effect to re-run on every shell render. The other shell callbacks
+(`handleTicketCreated`, `handleConnectionSaved`, `handleOpenCreationModal`,
+`handleCloseCreationModal`) use `useCallback` as convention.
 
 `handleConnectionSaved` increments `refreshKey` after `JiraConnectionPanel`
 reports a successful connection creation or replacement, triggering an immediate
@@ -923,11 +937,10 @@ re-fetch against the new Jira site. A failed save never calls the callback.
 ### Shared project-key utility
 
 `src/utils/project-key.ts` exports `normalizeProjectKey`, `isValidProjectKey`,
-`PROJECT_KEY_PATTERN`, and `MAX_PROJECT_KEY_LENGTH`. Both panels import from
-this module, eliminating the duplicated validation logic that would otherwise
-exist in two components. The pattern is the same conservative Jira project-key
-syntax the backend enforces: `^[A-Z][A-Z0-9]+$`, at least two characters, at
-most ten.
+`PROJECT_KEY_PATTERN`, and `MAX_PROJECT_KEY_LENGTH`. `ProjectSelector` and
+`RecentTicketsPanel` both import from this module. The pattern is the same
+conservative Jira project-key syntax the backend enforces: `^[A-Z][A-Z0-9]+$`,
+at least two characters, at most ten.
 
 ### Read API module extension
 
@@ -957,63 +970,75 @@ A single invalid ticket item rejects the whole response as a `server` error
 rather than silently dropping the item, so the caller always receives a
 consistent, fully-validated list.
 
-### RecentTicketsPanel component
+### TicketCreationForm component
 
-`src/components/RecentTicketsPanel.tsx` accepts `projectKey: string` and
-`refreshKey: number`. Its internal state is a single discriminated union:
+`src/components/TicketCreationForm.tsx` is a new reusable form component that
+accepts `projectKey: string` and an optional `onSuccess: (issueKey: string) =>
+void`. It exposes only `title` and `description` inputs — no project-key input —
+and shows a read-only "Creating in project `<key>`" context line. It owns the
+full ticket-creation submit lifecycle: client-side validation, the `createTicket`
+API call, success feedback (announced via `role="status"`) and field-clearing,
+and error feedback (via `role="alert"` with a distinct uncertain-outcome warning
+for non-idempotent failures). Duplicate submissions are prevented and controls
+are disabled while a request is in flight.
+
+### TicketCreationModal component
+
+`src/components/TicketCreationModal.tsx` wraps `TicketCreationForm` in an
+accessible modal. It renders `div[role="dialog" aria-modal="true"
+aria-labelledby=…]` (rather than a native `<dialog>`) with a "Create ticket" h2
+heading, a close (✕) button, and a Cancel button, and handles the Escape key.
+Escape is blocked while the form is submitting (detected by checking whether the
+form's submit button is disabled). On a successful creation it calls `onClose()`
+first, then `onTicketCreated()` to trigger a `refreshKey` increment in the shell.
+On failure the modal stays open. The `triggerRef` prop is used to return focus to
+the opening button after the modal closes.
+
+### RecentTicketsPanel component — Mode A and Mode B
+
+`src/components/RecentTicketsPanel.tsx` accepts `projectKey: string`,
+`refreshKey: number`, `onOpenCreationModal?: () => void`, and
+`onTicketCreated?: () => void`. Its internal state is a single discriminated
+union:
 
 ```
 { type: 'prompt' } | { type: 'loading' } | { type: 'success'; tickets } | { type: 'error'; kind }
 ```
 
-**Debouncing vs. immediate refresh:** the component uses three `useEffect` hooks:
+The `prompt` state returns `null` — the shell shows a no-project prompt itself.
+The `loading` and `error` states render a panel div without any heading. The
+`success` state has two distinct modes determined solely by `tickets.length`:
 
-- *Effect 0* (empty deps, unmount only): runs no body; its cleanup aborts any
-  active request and clears any pending debounce timer when the component
-  unmounts, preventing state updates after removal.
-- *Effect 1* responds to `projectKey` changes. When the normalized key is
-  invalid it aborts any active request and resets to `prompt` state immediately.
-  When the key is valid it **aborts any active request immediately** and sets
-  `loading` state, then starts a 400 ms debounce timer; when the timer fires it
-  calls `doFetch`. Aborting the old request before the debounce fires is the key
-  invariant that prevents a stale response from the previous project overwriting
-  the `loading` state during the debounce window.
-- *Effect 2* responds to `refreshKey` changes. It skips the initial render
-  (`refreshKey === 0`). On a positive increment (signalling a successful ticket
-  creation or Jira connection save) it cancels any pending debounce, reads the
-  current project key from a ref (`projectKeyRef.current`), and calls `doFetch`
-  immediately — bypassing the 400 ms wait.
+**Mode A** (tickets exist): renders a `<section aria-labelledby=…>` with a
+`.recent-tickets-header` flex row containing an h2 "Recent tickets" and a
+"Create ticket" button that calls `onOpenCreationModal`. Followed by
+`<ol className="recent-tickets-list">` with each ticket showing the title as an
+`<a>` link (`target="_blank" rel="noopener noreferrer"`), the issue key, and a
+`<time>` element with the ISO `dateTime` attribute. No inline creation form.
 
-`projectKeyRef` is kept in sync during the render body (`projectKeyRef.current =
-projectKey`), so the refreshKey effect always reads the latest project key
-without it being a reactive dependency of that effect, avoiding an unintended
-extra fetch on every key change.
+**Mode B** (zero tickets): renders a `<div className="recent-tickets-panel
+first-ticket-panel">` with an h2 "Create your first Jira ticket!" heading, an
+intro paragraph, and a `TicketCreationForm` that calls `onTicketCreated` on
+success. No "Recent tickets" heading, no ticket list, and no empty-state text.
 
-**Stale-response prevention:** `doFetch` (a stable `useCallback`) creates an
-`AbortController` and aborts any previous controller held in `abortRef` before
-starting a new request. Both the `.then` and `.catch` handlers check
-`controller.signal.aborted` before updating state, so a response that arrives
-after the project key changed (or after the component unmounts) is silently
-dropped. An `AbortError` is not mapped to an error state. Together, the
-immediate abort in Effect 1 and the stale check in `doFetch` ensure a response
-from any previous project can never become visible.
-
-**Rendering:** the success state renders an `<ol>` of tickets. Each item shows
-the issue key in a monospace span, the title as an `<a>` link with
-`target="_blank" rel="noopener noreferrer"`, and a `<time>` element with the
-ISO `dateTime` attribute. The error state renders a `role="alert"` region
-containing a safe copy paragraph and a **Retry** button that calls `doFetch`
-directly. Raw backend messages are never rendered.
+**Debouncing vs. immediate refresh** and **stale-response prevention** are
+unchanged: three `useEffect` hooks (unmount cleanup, debounced key changes, and
+immediate refresh on `refreshKey`), an `AbortController` per fetch, and stale
+checks in `.then`/`.catch` handlers.
 
 ### End-to-end flow
 
 ```
-AuthenticatedShell (projectKey, refreshKey)
-  |-> TicketCreationPanel (projectKey, onProjectKeyChange, onTicketCreated)
-  |     -> POST /api/tickets -> onTicketCreated() -> refreshKey++
-  |-> RecentTicketsPanel (projectKey, refreshKey)
-        -> GET /api/tickets?projectKey=<key> (debounced / immediate on refresh)
-        -> success: list of tickets | error: safe copy + Retry
+AuthenticatedShell (projectKey, refreshKey, creationModalOpen)
+  |-> JiraConnectionPanel (header: compact bar + modal)
+  |-> ProjectSelector (page-level key input)
+  |-> RecentTicketsPanel (projectKey, refreshKey, onOpenCreationModal, onTicketCreated)
+  |     Mode A: list + "Create ticket" -> opens TicketCreationModal
+  |     Mode B: TicketCreationForm -> POST /api/tickets -> onTicketCreated -> refreshKey++
+  |     Error: safe copy + Retry
+  |     -> GET /api/tickets?projectKey=<key> (debounced / immediate on refresh)
+  |-> TicketCreationModal (open, onClose, onTicketCreated)
+        -> TicketCreationForm -> POST /api/tickets -> onClose + refreshKey++
 ```
 
 ## API-key authentication (Milestone 12)

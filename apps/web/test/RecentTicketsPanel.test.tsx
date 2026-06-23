@@ -1,9 +1,12 @@
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import RecentTicketsPanel from '../src/components/RecentTicketsPanel';
 import {
+  createTicket,
   listRecentTickets,
   RecentTicketsApiError,
+  TicketApiError,
+  type CreatedTicket,
   type ListRecentTicketsResult,
   type RecentTicketsErrorKind,
 } from '../src/api/tickets';
@@ -13,10 +16,12 @@ vi.mock('../src/api/tickets', async () => {
   return {
     ...actual,
     listRecentTickets: vi.fn(),
+    createTicket: vi.fn(),
   };
 });
 
 const mockedList = vi.mocked(listRecentTickets);
+const mockedCreate = vi.mocked(createTicket);
 
 const TICKET_A = {
   issueId: '10001',
@@ -38,6 +43,11 @@ function success(tickets = [TICKET_A]): ListRecentTicketsResult {
   return { tickets };
 }
 
+const defaultProps = {
+  onOpenCreationModal: vi.fn(),
+  onTicketCreated: vi.fn(),
+};
+
 beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
   vi.clearAllMocks();
@@ -49,28 +59,21 @@ afterEach(() => {
 });
 
 // ---------------------------------------------------------------------------
-// Prompt state
+// Prompt state (no valid project)
 // ---------------------------------------------------------------------------
 
 describe('prompt state', () => {
-  it('shows a prompt when no project key is entered', () => {
-    render(<RecentTicketsPanel projectKey="" refreshKey={0} />);
+  it('renders nothing when no project key is entered', () => {
+    const { container } = render(<RecentTicketsPanel projectKey="" refreshKey={0} {...defaultProps} />);
 
-    expect(screen.getByText(/enter a jira project key/i)).toBeInTheDocument();
+    expect(container.firstChild).toBeNull();
     expect(mockedList).not.toHaveBeenCalled();
   });
 
-  it('shows a prompt for an invalid project key', () => {
-    render(<RecentTicketsPanel projectKey="1AB" refreshKey={0} />);
+  it('renders nothing for an invalid project key', () => {
+    const { container } = render(<RecentTicketsPanel projectKey="1AB" refreshKey={0} {...defaultProps} />);
 
-    expect(screen.getByText(/enter a jira project key/i)).toBeInTheDocument();
-    expect(mockedList).not.toHaveBeenCalled();
-  });
-
-  it('shows a prompt for a single-character key (too short)', () => {
-    render(<RecentTicketsPanel projectKey="A" refreshKey={0} />);
-
-    expect(screen.getByText(/enter a jira project key/i)).toBeInTheDocument();
+    expect(container.firstChild).toBeNull();
     expect(mockedList).not.toHaveBeenCalled();
   });
 });
@@ -81,15 +84,15 @@ describe('prompt state', () => {
 
 describe('no request for invalid keys', () => {
   it('makes no request when the project key is empty', async () => {
-    render(<RecentTicketsPanel projectKey="" refreshKey={0} />);
+    render(<RecentTicketsPanel projectKey="" refreshKey={0} {...defaultProps} />);
     await act(async () => { vi.advanceTimersByTime(600); });
 
     expect(mockedList).not.toHaveBeenCalled();
   });
 
   it('makes no request when a non-zero refreshKey arrives with an invalid key', async () => {
-    const { rerender } = render(<RecentTicketsPanel projectKey="" refreshKey={0} />);
-    rerender(<RecentTicketsPanel projectKey="" refreshKey={1} />);
+    const { rerender } = render(<RecentTicketsPanel projectKey="" refreshKey={0} {...defaultProps} />);
+    rerender(<RecentTicketsPanel projectKey="" refreshKey={1} {...defaultProps} />);
     await act(async () => { vi.advanceTimersByTime(600); });
 
     expect(mockedList).not.toHaveBeenCalled();
@@ -104,7 +107,7 @@ describe('loading state', () => {
   it('shows a loading state while the request is pending', async () => {
     mockedList.mockReturnValue(new Promise(() => {}));
 
-    render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} />);
+    render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} {...defaultProps} />);
     await act(async () => { vi.advanceTimersByTime(600); });
 
     expect(screen.getByText(/loading tickets/i)).toBeInTheDocument();
@@ -113,36 +116,196 @@ describe('loading state', () => {
   it('shows loading immediately when the project key becomes valid', () => {
     mockedList.mockReturnValue(new Promise(() => {}));
 
-    render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} />);
+    render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} {...defaultProps} />);
 
     expect(screen.getByText(/loading tickets/i)).toBeInTheDocument();
   });
 });
 
 // ---------------------------------------------------------------------------
-// Empty state
+// Mode B — zero tickets (first-ticket inline form)
 // ---------------------------------------------------------------------------
 
-describe('empty state', () => {
-  it('shows the empty state when no tickets are returned', async () => {
+describe('Mode B — zero tickets', () => {
+  it('renders "Create your first Jira ticket!" when the response has zero tickets', async () => {
     mockedList.mockResolvedValue(success([]));
 
-    render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} />);
+    render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} {...defaultProps} />);
     await act(async () => { vi.advanceTimersByTime(600); });
 
-    expect(screen.getByText(/no tickets created through this application/i)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /create your first jira ticket/i })).toBeInTheDocument();
+  });
+
+  it('does NOT render a "Recent tickets" heading in Mode B', async () => {
+    mockedList.mockResolvedValue(success([]));
+
+    render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} {...defaultProps} />);
+    await act(async () => { vi.advanceTimersByTime(600); });
+
+    expect(screen.queryByRole('heading', { name: /recent tickets/i })).not.toBeInTheDocument();
+  });
+
+  it('does NOT render a ticket list or empty-state text in Mode B', async () => {
+    mockedList.mockResolvedValue(success([]));
+
+    render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} {...defaultProps} />);
+    await act(async () => { vi.advanceTimersByTime(600); });
+
+    expect(screen.queryByRole('list')).not.toBeInTheDocument();
+    expect(screen.queryByText(/no tickets/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/no recent tickets/i)).not.toBeInTheDocument();
+  });
+
+  it('shows the inline ticket creation form with title and description inputs in Mode B', async () => {
+    mockedList.mockResolvedValue(success([]));
+
+    render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} {...defaultProps} />);
+    await act(async () => { vi.advanceTimersByTime(600); });
+
+    expect(screen.getByLabelText(/title/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/description/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^create ticket$/i })).toBeInTheDocument();
+  });
+
+  it('does NOT show a project-key input in the inline form (Mode B)', async () => {
+    mockedList.mockResolvedValue(success([]));
+
+    render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} {...defaultProps} />);
+    await act(async () => { vi.advanceTimersByTime(600); });
+
+    // No project-key input anywhere — it lives in the page-level selector.
+    expect(screen.queryByLabelText(/project key/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/jira project/i)).not.toBeInTheDocument();
+  });
+
+  it('transitions to Mode A after successful first-ticket creation', async () => {
+    const onTicketCreated = vi.fn();
+    mockedList
+      .mockResolvedValueOnce(success([]))
+      .mockResolvedValue(success([TICKET_A]));
+    mockedCreate.mockResolvedValue({ issueId: '10001', issueKey: 'SCRUM-1' } as CreatedTicket);
+
+    render(
+      <RecentTicketsPanel
+        projectKey="SCRUM"
+        refreshKey={0}
+        onOpenCreationModal={vi.fn()}
+        onTicketCreated={onTicketCreated}
+      />,
+    );
+    await act(async () => { vi.advanceTimersByTime(600); });
+
+    // Mode B: fill and submit form.
+    fireEvent.change(screen.getByLabelText(/title/i), { target: { value: 'Test ticket' } });
+    fireEvent.change(screen.getByLabelText(/description/i), { target: { value: 'Description' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /^create ticket$/i }));
+    });
+
+    await screen.findByRole('status');
+    // onTicketCreated notifies parent to increment refreshKey.
+    expect(onTicketCreated).toHaveBeenCalled();
+  });
+
+  it('calls onTicketCreated after successful inline creation in Mode B', async () => {
+    const onTicketCreated = vi.fn();
+    mockedList.mockResolvedValue(success([]));
+    mockedCreate.mockResolvedValue({ issueId: '10001', issueKey: 'SCRUM-1' } as CreatedTicket);
+
+    render(
+      <RecentTicketsPanel
+        projectKey="SCRUM"
+        refreshKey={0}
+        onOpenCreationModal={vi.fn()}
+        onTicketCreated={onTicketCreated}
+      />,
+    );
+    await act(async () => { vi.advanceTimersByTime(600); });
+
+    fireEvent.change(screen.getByLabelText(/title/i), { target: { value: 'Test' } });
+    fireEvent.change(screen.getByLabelText(/description/i), { target: { value: 'Desc' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /^create ticket$/i }));
+    });
+
+    await screen.findByRole('status');
+    expect(onTicketCreated).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT call onTicketCreated after failed inline creation in Mode B', async () => {
+    const onTicketCreated = vi.fn();
+    mockedList.mockResolvedValue(success([]));
+    mockedCreate.mockRejectedValue(new TicketApiError('not_connected', 'x'));
+
+    render(
+      <RecentTicketsPanel
+        projectKey="SCRUM"
+        refreshKey={0}
+        onOpenCreationModal={vi.fn()}
+        onTicketCreated={onTicketCreated}
+      />,
+    );
+    await act(async () => { vi.advanceTimersByTime(600); });
+
+    fireEvent.change(screen.getByLabelText(/title/i), { target: { value: 'Test' } });
+    fireEvent.change(screen.getByLabelText(/description/i), { target: { value: 'Desc' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /^create ticket$/i }));
+    });
+
+    await screen.findByRole('alert');
+    expect(onTicketCreated).not.toHaveBeenCalled();
   });
 });
 
 // ---------------------------------------------------------------------------
-// Success rendering
+// Mode A — tickets exist
 // ---------------------------------------------------------------------------
 
-describe('success rendering', () => {
+describe('Mode A — tickets exist', () => {
+  it('renders the "Recent tickets" heading when tickets are returned', async () => {
+    mockedList.mockResolvedValue(success([TICKET_A]));
+
+    render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} {...defaultProps} />);
+    await act(async () => { vi.advanceTimersByTime(600); });
+
+    expect(screen.getByRole('heading', { name: /recent tickets/i })).toBeInTheDocument();
+  });
+
+  it('does NOT render the inline creation form in Mode A', async () => {
+    mockedList.mockResolvedValue(success([TICKET_A]));
+
+    render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} {...defaultProps} />);
+    await act(async () => { vi.advanceTimersByTime(600); });
+
+    expect(screen.queryByRole('heading', { name: /create your first/i })).not.toBeInTheDocument();
+    // No title/description inputs (those belong to the modal, not the panel in Mode A).
+    expect(screen.queryByLabelText(/^title$/i)).not.toBeInTheDocument();
+  });
+
+  it('renders a "Create ticket" button that calls onOpenCreationModal', async () => {
+    const onOpenCreationModal = vi.fn();
+    mockedList.mockResolvedValue(success([TICKET_A]));
+
+    render(
+      <RecentTicketsPanel
+        projectKey="SCRUM"
+        refreshKey={0}
+        onOpenCreationModal={onOpenCreationModal}
+        onTicketCreated={vi.fn()}
+      />,
+    );
+    await act(async () => { vi.advanceTimersByTime(600); });
+
+    fireEvent.click(screen.getByRole('button', { name: /^create ticket$/i }));
+
+    expect(onOpenCreationModal).toHaveBeenCalledTimes(1);
+  });
+
   it('renders a ticket with its title as a link', async () => {
     mockedList.mockResolvedValue(success([TICKET_A]));
 
-    render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} />);
+    render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} {...defaultProps} />);
     await act(async () => { vi.advanceTimersByTime(600); });
 
     const link = screen.getByRole('link', { name: /leaked service-account key/i });
@@ -152,7 +315,7 @@ describe('success rendering', () => {
   it('renders the Jira issue key alongside the title', async () => {
     mockedList.mockResolvedValue(success([TICKET_A]));
 
-    render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} />);
+    render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} {...defaultProps} />);
     await act(async () => { vi.advanceTimersByTime(600); });
 
     expect(screen.getByText('SCRUM-1')).toBeInTheDocument();
@@ -161,7 +324,7 @@ describe('success rendering', () => {
   it('renders the creation time in a <time> element with the ISO dateTime attribute', async () => {
     mockedList.mockResolvedValue(success([TICKET_A]));
 
-    render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} />);
+    render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} {...defaultProps} />);
     await act(async () => { vi.advanceTimersByTime(600); });
 
     const timeEl = document.querySelector('time');
@@ -172,7 +335,7 @@ describe('success rendering', () => {
   it('links open in a new tab with safe rel attributes', async () => {
     mockedList.mockResolvedValue(success([TICKET_A]));
 
-    render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} />);
+    render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} {...defaultProps} />);
     await act(async () => { vi.advanceTimersByTime(600); });
 
     const link = screen.getByRole('link', { name: /leaked service-account key/i }) as HTMLAnchorElement;
@@ -185,7 +348,7 @@ describe('success rendering', () => {
   it('renders all returned tickets in server order', async () => {
     mockedList.mockResolvedValue(success([TICKET_A, TICKET_B]));
 
-    render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} />);
+    render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} {...defaultProps} />);
     await act(async () => { vi.advanceTimersByTime(600); });
 
     const links = screen.getAllByRole('link');
@@ -201,13 +364,12 @@ describe('success rendering', () => {
 describe('error state and retry', () => {
   async function renderWithError(kind: RecentTicketsErrorKind) {
     mockedList.mockRejectedValue(new RecentTicketsApiError(kind, 'raw ignored'));
-    render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} />);
+    render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} {...defaultProps} />);
     await act(async () => { vi.advanceTimersByTime(600); });
   }
 
   it('shows an error alert for a not_connected error', async () => {
     await renderWithError('not_connected');
-    expect(screen.getByRole('alert')).toBeInTheDocument();
     expect(screen.getByRole('alert')).toHaveTextContent(/not connected to jira/i);
   });
 
@@ -246,7 +408,7 @@ describe('error state and retry', () => {
       .mockRejectedValueOnce(new RecentTicketsApiError('unreachable', 'x'))
       .mockResolvedValue(success([TICKET_A]));
 
-    render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} />);
+    render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} {...defaultProps} />);
     await act(async () => { vi.advanceTimersByTime(600); });
 
     expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument();
@@ -258,11 +420,11 @@ describe('error state and retry', () => {
     expect(await screen.findByRole('link', { name: /leaked service-account key/i })).toBeInTheDocument();
   });
 
-  it('does not show duplicate-creation warnings in error messages', async () => {
+  it('does not show duplicate-creation warnings in read error messages', async () => {
     const kinds: RecentTicketsErrorKind[] = ['timeout', 'unreachable', 'network', 'server', 'internal_error'];
     for (const kind of kinds) {
       mockedList.mockRejectedValue(new RecentTicketsApiError(kind, 'x'));
-      const { unmount } = render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} />);
+      const { unmount } = render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} {...defaultProps} />);
       await act(async () => { vi.advanceTimersByTime(600); });
       expect(screen.getByRole('alert')).not.toHaveTextContent(/duplicate/i);
       unmount();
@@ -278,7 +440,7 @@ describe('project-key normalization', () => {
   it('normalizes a lowercase key to uppercase before requesting', async () => {
     mockedList.mockResolvedValue(success([]));
 
-    render(<RecentTicketsPanel projectKey="scrum" refreshKey={0} />);
+    render(<RecentTicketsPanel projectKey="scrum" refreshKey={0} {...defaultProps} />);
     await act(async () => { vi.advanceTimersByTime(600); });
 
     expect(mockedList).toHaveBeenCalledWith('SCRUM', expect.anything());
@@ -287,7 +449,7 @@ describe('project-key normalization', () => {
   it('trims whitespace from the key before requesting', async () => {
     mockedList.mockResolvedValue(success([]));
 
-    render(<RecentTicketsPanel projectKey="  SCRUM  " refreshKey={0} />);
+    render(<RecentTicketsPanel projectKey="  SCRUM  " refreshKey={0} {...defaultProps} />);
     await act(async () => { vi.advanceTimersByTime(600); });
 
     expect(mockedList).toHaveBeenCalledWith('SCRUM', expect.anything());
@@ -302,14 +464,14 @@ describe('changing the project key', () => {
   it('requests the new project after the debounce when the key changes', async () => {
     mockedList.mockResolvedValue(success([]));
 
-    const { rerender } = render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} />);
+    const { rerender } = render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} {...defaultProps} />);
     await act(async () => { vi.advanceTimersByTime(600); });
 
     expect(mockedList).toHaveBeenCalledTimes(1);
     expect(mockedList).toHaveBeenLastCalledWith('SCRUM', expect.anything());
 
     mockedList.mockResolvedValue(success([TICKET_B]));
-    rerender(<RecentTicketsPanel projectKey="PROJ" refreshKey={0} />);
+    rerender(<RecentTicketsPanel projectKey="PROJ" refreshKey={0} {...defaultProps} />);
     await act(async () => { vi.advanceTimersByTime(600); });
 
     expect(mockedList).toHaveBeenCalledTimes(2);
@@ -319,29 +481,28 @@ describe('changing the project key', () => {
   it('does not show the previous project results while loading the new project', async () => {
     mockedList.mockResolvedValue(success([TICKET_A]));
 
-    const { rerender } = render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} />);
+    const { rerender } = render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} {...defaultProps} />);
     await act(async () => { vi.advanceTimersByTime(600); });
 
     expect(screen.getByRole('link', { name: TICKET_A.title })).toBeInTheDocument();
 
-    // Switch to a new project — loading state should immediately hide old results.
     mockedList.mockReturnValue(new Promise(() => {}));
-    rerender(<RecentTicketsPanel projectKey="PROJ" refreshKey={0} />);
+    rerender(<RecentTicketsPanel projectKey="PROJ" refreshKey={0} {...defaultProps} />);
 
     expect(screen.queryByRole('link', { name: TICKET_A.title })).not.toBeInTheDocument();
     expect(screen.getByText(/loading tickets/i)).toBeInTheDocument();
   });
 
-  it('reverts to prompt when the key becomes empty', async () => {
+  it('reverts to no content when the key becomes empty', async () => {
     mockedList.mockResolvedValue(success([TICKET_A]));
 
-    const { rerender } = render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} />);
+    const { rerender } = render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} {...defaultProps} />);
     await act(async () => { vi.advanceTimersByTime(600); });
 
-    rerender(<RecentTicketsPanel projectKey="" refreshKey={0} />);
+    rerender(<RecentTicketsPanel projectKey="" refreshKey={0} {...defaultProps} />);
 
-    expect(screen.getByText(/enter a jira project key/i)).toBeInTheDocument();
     expect(screen.queryByRole('link')).not.toBeInTheDocument();
+    expect(screen.queryByText(/loading tickets/i)).not.toBeInTheDocument();
   });
 });
 
@@ -358,17 +519,14 @@ describe('stale response prevention', () => {
       .mockReturnValueOnce(scrumPromise)
       .mockResolvedValue(success([TICKET_B]));
 
-    const { rerender } = render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} />);
-    await act(async () => { vi.advanceTimersByTime(600); }); // SCRUM debounce fires
+    const { rerender } = render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} {...defaultProps} />);
+    await act(async () => { vi.advanceTimersByTime(600); });
 
-    // Switch to PROJ before SCRUM resolves.
-    rerender(<RecentTicketsPanel projectKey="PROJ" refreshKey={0} />);
-    await act(async () => { vi.advanceTimersByTime(600); }); // PROJ debounce fires
+    rerender(<RecentTicketsPanel projectKey="PROJ" refreshKey={0} {...defaultProps} />);
+    await act(async () => { vi.advanceTimersByTime(600); });
 
-    // Now resolve the stale SCRUM request.
     await act(async () => { resolveSCRUM(success([TICKET_A])); });
 
-    // PROJ's results (TICKET_B) should be shown; SCRUM's TICKET_A must not appear.
     expect(screen.queryByText(TICKET_A.title)).not.toBeInTheDocument();
     expect(screen.getByText(TICKET_B.title)).toBeInTheDocument();
   });
@@ -381,27 +539,23 @@ describe('stale response prevention', () => {
       .mockReturnValueOnce(scrumPromise)
       .mockResolvedValue(success([]));
 
-    const { rerender } = render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} />);
-    await act(async () => { vi.advanceTimersByTime(600); }); // SCRUM debounce fires, request in flight
+    const { rerender } = render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} {...defaultProps} />);
+    await act(async () => { vi.advanceTimersByTime(600); });
 
-    // Switch to PROJ — the SCRUM request is aborted immediately and the component
-    // enters loading state for PROJ. The PROJ debounce has NOT fired yet.
-    rerender(<RecentTicketsPanel projectKey="PROJ" refreshKey={0} />);
+    rerender(<RecentTicketsPanel projectKey="PROJ" refreshKey={0} {...defaultProps} />);
 
     expect(screen.getByText(/loading tickets/i)).toBeInTheDocument();
 
-    // Resolve the stale SCRUM promise while PROJ debounce is still pending.
     await act(async () => { resolveSCRUM(success([TICKET_A])); });
 
-    // SCRUM result must be invisible; loading state for PROJ must still be shown.
     expect(screen.queryByText(TICKET_A.title)).not.toBeInTheDocument();
     expect(screen.getByText(/loading tickets/i)).toBeInTheDocument();
 
-    // Now fire the PROJ debounce and let its response resolve.
     await act(async () => { vi.advanceTimersByTime(600); });
 
     expect(screen.queryByText(TICKET_A.title)).not.toBeInTheDocument();
-    expect(screen.getByText(/no tickets/i)).toBeInTheDocument();
+    // Mode B: shows first-ticket form, no recent-ticket text.
+    expect(screen.getByRole('heading', { name: /create your first jira ticket/i })).toBeInTheDocument();
   });
 
   it('does not show an error when a request is aborted by a project change', async () => {
@@ -412,28 +566,14 @@ describe('stale response prevention', () => {
       .mockReturnValueOnce(scrumPromise)
       .mockResolvedValue(success([]));
 
-    const { rerender } = render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} />);
+    const { rerender } = render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} {...defaultProps} />);
     await act(async () => { vi.advanceTimersByTime(600); });
 
-    rerender(<RecentTicketsPanel projectKey="PROJ" refreshKey={0} />);
+    rerender(<RecentTicketsPanel projectKey="PROJ" refreshKey={0} {...defaultProps} />);
 
-    // Resolve the aborted SCRUM response — must produce no error.
     await act(async () => { resolveSCRUM(success([TICKET_A])); });
 
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-  });
-
-  it('aborted requests do not show a network error', async () => {
-    mockedList.mockReturnValue(new Promise(() => {})); // never resolves
-
-    const { rerender } = render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} />);
-    await act(async () => { vi.advanceTimersByTime(600); });
-
-    // Aborting happens when key changes.
-    rerender(<RecentTicketsPanel projectKey="" refreshKey={0} />);
-
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-    expect(screen.getByText(/enter a jira project key/i)).toBeInTheDocument();
   });
 
   it('aborts the active request when the component unmounts', async () => {
@@ -447,7 +587,7 @@ describe('stale response prevention', () => {
       });
     });
 
-    const { unmount } = render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} />);
+    const { unmount } = render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} {...defaultProps} />);
     await act(async () => { vi.advanceTimersByTime(600); });
 
     expect(screen.getByText(/loading tickets/i)).toBeInTheDocument();
@@ -458,36 +598,37 @@ describe('stale response prevention', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Refresh from successful creation
+// Refresh on successful ticket creation
 // ---------------------------------------------------------------------------
 
 describe('refresh on successful ticket creation', () => {
   it('immediately re-fetches when refreshKey increments (bypasses debounce)', async () => {
     mockedList.mockResolvedValue(success([TICKET_A]));
 
-    const { rerender } = render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} />);
+    const { rerender } = render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} {...defaultProps} />);
     await act(async () => { vi.advanceTimersByTime(600); });
 
     expect(mockedList).toHaveBeenCalledTimes(1);
 
-    // Simulate successful creation: refreshKey increments.
     mockedList.mockResolvedValue(success([TICKET_A, TICKET_B]));
-    rerender(<RecentTicketsPanel projectKey="SCRUM" refreshKey={1} />);
+    rerender(<RecentTicketsPanel projectKey="SCRUM" refreshKey={1} {...defaultProps} />);
 
-    // Should fire immediately (no debounce wait needed).
     await act(async () => { vi.advanceTimersByTime(0); });
 
     expect(mockedList).toHaveBeenCalledTimes(2);
-    expect(screen.getByText(TICKET_B.title)).toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(screen.getByText(TICKET_B.title)).toBeInTheDocument();
+    });
   });
 
   it('uses the current project key when refreshKey increments', async () => {
     mockedList.mockResolvedValue(success([]));
 
-    const { rerender } = render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} />);
+    const { rerender } = render(<RecentTicketsPanel projectKey="SCRUM" refreshKey={0} {...defaultProps} />);
     await act(async () => { vi.advanceTimersByTime(600); });
 
-    rerender(<RecentTicketsPanel projectKey="SCRUM" refreshKey={1} />);
+    rerender(<RecentTicketsPanel projectKey="SCRUM" refreshKey={1} {...defaultProps} />);
     await act(async () => { vi.advanceTimersByTime(0); });
 
     expect(mockedList).toHaveBeenLastCalledWith('SCRUM', expect.anything());

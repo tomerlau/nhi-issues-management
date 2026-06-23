@@ -226,76 +226,84 @@ model.
 
 Frontend only; it consumes the unchanged Milestone 10 backend contract
 (`GET /api/tickets?projectKey=...`). No backend changes were made. Milestone 11
-lets an authenticated user whose tenant is connected to Jira view the ten most
-recent tickets created through this application for a selected project.
+implements the full recent-tickets UX redesign: a page-level project selector,
+two distinct ticket-panel modes, Jira connection management in a modal, and a
+reusable ticket-creation form component.
 
 Implemented:
 
-- **Shared project-key state** lifted to `AuthenticatedShell`
-  (`apps/web/src/components/AuthenticatedShell.tsx`). The project key entered
-  in the ticket-creation form is now shared with the recent-tickets panel: one
-  controlled input drives both, so typing a project key in the creation form
-  immediately updates the recent-tickets list. A `refreshKey` counter is
-  incremented on each successful ticket creation or Jira connection save to
-  trigger an immediate panel refresh. `handleConnectionChange` is wrapped in
-  `useCallback` because `JiraConnectionPanel` lists it in an effect dependency
-  array; the other shell callbacks use `useCallback` as convention.
-- **A shared project-key utility** (`apps/web/src/utils/project-key.ts`) with
-  `normalizeProjectKey`, `isValidProjectKey`, `PROJECT_KEY_PATTERN`, and
-  `MAX_PROJECT_KEY_LENGTH`, shared between `TicketCreationPanel` and
-  `RecentTicketsPanel`.
-- **A `RecentTicketsPanel` component**
-  (`apps/web/src/components/RecentTicketsPanel.tsx`) rendered inside the
-  authenticated shell when the tenant is Jira-connected. It accepts a
-  `projectKey` prop and a `refreshKey` prop. It renders:
-  - **Prompt state**: shown when no valid project key is entered — explains that
-    a project key is required and makes no network request.
-  - **Loading state**: shown immediately when a valid key is entered or changes,
-    before the debounced fetch fires.
-  - **Empty state**: shown when the API returns an empty tickets array.
-  - **Success state**: a list of tickets, each showing the Jira issue key, the
-    title as an `<a>` link (opening in a new tab with `rel="noopener noreferrer"`),
-    and the creation time in a `<time>` element with the ISO `dateTime` attribute.
-  - **Error state**: a `role="alert"` region with safe, category-specific copy
-    and a **Retry** button. Raw backend messages are never shown.
-- **Debounced project-key changes with immediate abort**: a 400 ms debounce
-  gate prevents sending a request on every keystroke. When the project key
-  changes to a valid value the panel enters the loading state immediately
-  **and aborts any active request for the previous project** — so a stale
-  response can never overwrite the loading state during the debounce window.
-  The network request for the new key is delayed by 400 ms. When `refreshKey`
-  increments (after a successful ticket creation or Jira connection save), the
-  debounce is bypassed and the fetch fires immediately.
-- **Stale-response prevention via `AbortController`**: every new fetch aborts
-  the previous one. Aborted responses are silently ignored — no error is shown.
-  The component also clears any pending debounce timer and aborts any active
-  request when it unmounts, preventing state updates after removal.
+- **A page-level `ProjectSelector` component**
+  (`apps/web/src/components/ProjectSelector.tsx`). The project key is now owned
+  by `AuthenticatedShell` and entered in a dedicated labeled input outside any
+  form or modal. It shows a validation error (via `role="alert"`) only for
+  non-empty, invalid keys. The shared project-key utility
+  (`apps/web/src/utils/project-key.ts`) provides `normalizeProjectKey`,
+  `isValidProjectKey`, `PROJECT_KEY_PATTERN`, and `MAX_PROJECT_KEY_LENGTH` to
+  both the selector and the recent-tickets panel.
+- **`JiraConnectionPanel` refactored to a compact status bar + modal**
+  (`apps/web/src/components/JiraConnectionPanel.tsx`). The panel now renders
+  only a compact status indicator ("Jira connected" / "Jira not connected") and
+  a trigger button ("Manage" or "Connect Jira") in the application header.
+  Connection details (site URL, email), the ticket-sharing disclaimer, and the
+  create/replace form are inside an accessible modal (`div[role="dialog"
+  aria-modal="true"]`) that opens on demand. The modal closes on success, stays
+  open on failure, and blocks Escape while a save is in flight. The API-token
+  secret-handling rules (uncontrolled input, cleared immediately on submit,
+  never in React state) are preserved unchanged.
+- **Two distinct content modes for `RecentTicketsPanel`**
+  (`apps/web/src/components/RecentTicketsPanel.tsx`):
+  - **Mode A** (success, tickets exist): renders a `<section>` with a "Recent
+    tickets" heading, an `<ol>` of ticket items (each with key, title link, and
+    creation time), and a "Create ticket" button that opens the creation modal
+    via `onOpenCreationModal`. No inline creation form.
+  - **Mode B** (success, zero tickets): renders an inline "Create your first
+    Jira ticket!" panel with an intro paragraph and a `TicketCreationForm`.
+    No "Recent tickets" heading, ticket list, or empty-state text.
+  - **Prompt / loading / error states** are unchanged from the previous
+    implementation. `prompt` returns `null` (the shell shows a no-project
+    prompt instead).
+- **A reusable `TicketCreationForm` component**
+  (`apps/web/src/components/TicketCreationForm.tsx`). Accepts `projectKey`
+  (for the API call and a read-only "Creating in project …" context display)
+  and an optional `onSuccess` callback. Exposes only `title` and `description`
+  fields — no project-key input. Handles the full create-ticket submit lifecycle
+  (validation, API call, success/error feedback, uncertain-outcome warning). Used
+  in both Mode B (inline) and inside the creation modal.
+- **An accessible `TicketCreationModal`**
+  (`apps/web/src/components/TicketCreationModal.tsx`). Opens via
+  `onOpenCreationModal` from Mode A. Implements `div[role="dialog"
+  aria-modal="true"]` with `aria-labelledby`, a "Create ticket" heading, a close
+  (✕) button, a Cancel button, and Escape-key handling that is blocked while
+  the form is submitting. On success, closes the modal and calls
+  `onTicketCreated` to trigger a refresh.
+- **`AuthenticatedShell` updated** to own `projectKey`, `refreshKey`, and
+  `creationModalOpen` state. When Jira is connected, it renders:
+  `ProjectSelector` → a no-project prompt or `RecentTicketsPanel` → and
+  `TicketCreationModal` (portal). `JiraConnectionPanel` is rendered in the
+  page header alongside user info.
+- **Debounced project-key changes, immediate abort, stale-response prevention,
+  and refresh-key triggers** — all unchanged from the prior milestone:
+  400 ms debounce, immediate abort of in-flight requests on key change,
+  `AbortController`-based stale-response prevention, unmount cleanup, and
+  `refreshKey` increment for immediate re-fetch after a successful creation or
+  Jira connection save.
 - **Defensive response parsing** in `listRecentTickets`
-  (`apps/web/src/api/tickets.ts`): each ticket item is validated for non-empty
-  string fields, a valid ISO timestamp, and a safe Atlassian URL
-  (`https://*.atlassian.net/browse/...`). A malformed success body becomes a
-  `server` error. `AbortError` is propagated raw. Raw backend messages are
-  always discarded.
-- **Jira connection save as a refresh trigger**: `JiraConnectionPanel` gains an
-  `onConnectionSaved` callback, called after a successful connection creation or
-  replacement. `AuthenticatedShell` responds by incrementing `refreshKey`,
-  which causes `RecentTicketsPanel` to abort any active request, enter loading
-  state, and immediately re-fetch against the new Jira connection. A failed
-  save never triggers a refresh.
-- **Frontend tests** (Vitest + React Testing Library) covering the
-  `listRecentTickets` API function (41 tests: request shape, URL encoding,
-  `AbortSignal` forwarding, success parsing, all malformed-body/item rejections,
-  timestamp and URL validation, backend error-code mapping, fallback handling,
-  abort behavior, and `messageForReadError` completeness), the
-  `RecentTicketsPanel` component (34 tests: prompt, loading, empty, success
-  rendering, all error kinds with retry, key normalization, changing project key,
-  stale-response prevention including stale responses during the debounce
-  window, unmount cleanup, refresh on creation), and `JiraConnectionPanel`
-  (41 tests including `onConnectionSaved` behavior). The `TicketCreationPanel`
-  tests are updated for the lifted `projectKey` prop via a stateful `Wrapper`.
-  The integration test suite in `App.test.tsx` gains seven new tests covering the
-  panel's conditional display, creation-triggers-refresh, and
-  connection-save-triggers-refresh behavior.
+  (`apps/web/src/api/tickets.ts`): unchanged — each ticket item validated for
+  non-empty string fields, a valid ISO timestamp, and a safe Atlassian URL.
+  `AbortError` is propagated raw. Raw backend messages are always discarded.
+- **Frontend tests** (Vitest + React Testing Library): `ProjectSelector`
+  (11 tests: label, helper text, value, outside-form guard, onChange, validation
+  error rules, disabled state), `RecentTicketsPanel` (42 tests: prompt/loading/
+  error states, Mode A and Mode B rendering, onOpenCreationModal and
+  onTicketCreated callbacks, Mode B → Mode A transition, stale-response
+  prevention), `JiraConnectionPanel` (48 tests: compact-bar states, modal open/
+  close, Escape blocking, form fields inside modal, successful/failed saves,
+  validation, duplicate-submit prevention, error-category mapping, token secret
+  handling, autofill mitigation, onConnectionSaved and onConnectionChange
+  callbacks), `TicketCreationForm` (26 tests: form fields, no project-key input,
+  project context display, validation, API call, error mapping, uncertain
+  outcomes), and `App.test.tsx` integration suite (33 tests including compact
+  Jira bar, Mode A and Mode B, modal open/close, and creation flow).
 
 Explicitly **not** implemented in Milestone 11: any backend changes; pagination,
 search, or filtering beyond a single `projectKey`; inline creation-to-list
